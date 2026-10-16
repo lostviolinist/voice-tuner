@@ -13,3 +13,5 @@
 @media(max-width:640px){.layout-picker{width:100%}.typing-guide{gap:3px}.typing-guide-key{font-size:8px;padding:6px 0}.typing-guide-key kbd{font-size:11px}.typing-guide-key small{font-size:7px}.typing-instructions summary{font-size:12px}.typing-instructions summary>span{font-size:8px}}
 
 .typing-guide-key.active{background:var(--ink);color:#fff;border-color:var(--ink)}.typing-guide-key.active small{color:#e4dceb}
+
+.harmonics{height:auto;grid-auto-rows:152px;row-gap:22px}@media(max-width:640px){.harmonics{height:auto;grid-auto-rows:132px}}

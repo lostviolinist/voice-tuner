@@ -1,8 +1,8 @@
 import { Circuit } from './vendor/numeric-ui-core.js';
 import { cycle } from './dsp.js';
 export { cycle } from './dsp.js';
-export const HARMONICS = 16;
-export const SAMPLES = 128;
+export const HARMONICS = 64;
+export const SAMPLES = 256;
 export const initialWeights = () => Float32Array.from({ length: HARMONICS }, (_, i) => i === 0 ? .65 : .018);
 export class Instrument {
   constructor() {

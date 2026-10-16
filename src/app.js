@@ -1,4 +1,4 @@
-import { Instrument, cycle, HARMONICS } from './model.js';
+import { Instrument, cycle, HARMONICS, SAMPLES } from './model.js';
 import { analyze, vowel } from './analysis.js';
 import { AudioEngine } from './audio.js';
 import { initDSP } from './dsp.js';
@@ -40,7 +40,7 @@ function setTraining(value) {
 function setTarget(amplitudes, frequency, name) {
   silence(); setTraining(false); target = amplitudes; pitch = frequency;
   model.setTarget(target); currentLoss = model.evaluate().loss;
-  baseline = Math.max(cycle(target).reduce((sum, n) => sum + n*n, 0) / 128, 1e-8);
+  baseline = Math.max(cycle(target).reduce((sum, n) => sum + n*n, 0) / SAMPLES, 1e-8);
   $('source-name').textContent = name; $('pitch').textContent = `${Math.round(pitch)} Hz · ${noteName(pitch)}`;
   for (let i = 0; i < HARMONICS; i++) markers[i].style.bottom = `${target[i] * 100}%`;
   $('play-hint').textContent = 'Train this sound to update the piano. Until then, it plays your current instrument.';
@@ -65,7 +65,7 @@ function draw(waveform) {
   const targetWave = cycle(target), peak = Math.max(1, ...targetWave.map(Math.abs), ...waveform.map(Math.abs));
   for (const [data,color,lineWidth] of [[targetWave,'#ac93bc',1.5],[waveform,'#392c42',2]]) {
     ctx.beginPath(); ctx.lineWidth = lineWidth; ctx.strokeStyle = color;
-    for (let i=0;i<=128;i++) { const x = i/128*w, y = h/2 - data[i%128]/peak*(h*.34); i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); }
+    for (let i=0;i<=SAMPLES;i++) { const x = i/SAMPLES*w, y = h/2 - data[i%SAMPLES]/peak*(h*.34); i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); }
     ctx.stroke();
   }
 }
@@ -255,7 +255,7 @@ window.addEventListener('blur', silence);
 document.addEventListener('visibilitychange', () => { if (document.hidden) { silence(); setTraining(false); } });
 $('volume').addEventListener('input', event => audio.volume(Number(event.target.value)));
 $('save').addEventListener('click', () => {
-  const data = { format:'voice-tuner/v1', harmonics:Array.from(model.weights), sourcePitchHz:pitch, source:$('source-name').textContent, lockedHarmonics:Array.from(locks, h => h+1) };
+  const data = { format:'meloform/v2', harmonicCount:HARMONICS, harmonics:Array.from(model.weights), sourcePitchHz:pitch, source:$('source-name').textContent, lockedHarmonics:Array.from(locks, h => h+1) };
   const url = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{ type:'application/json' }));
   const a = document.createElement('a'); a.href=url; a.download='my-meloform-instrument.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
   status('Saved your harmonic recipe. Your recording is not included.');

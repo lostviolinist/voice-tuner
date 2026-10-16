@@ -1,18 +1,20 @@
 //! Dependency-free DSP kernel. Handwired handles learning; Rust handles sound analysis.
 use std::f64::consts::PI;
+pub const HARMONICS: usize = 64;
+pub const WAVE_SAMPLES: usize = 256;
 fn normalize(values: &mut [f32]) {
     let maximum = values.iter().copied().fold(0.00001_f32, f32::max);
     for v in values {
         *v = *v / maximum * 0.85;
     }
 }
-pub fn vowel(kind: u32, pitch: f32) -> [f32; 16] {
+pub fn vowel(kind: u32, pitch: f32) -> [f32; HARMONICS] {
     let formants: [(f32, f32); 3] = match kind {
         1 => [(750., 250.), (1200., 280.), (2600., 450.)],
         2 => [(300., 140.), (2300., 350.), (3000., 450.)],
         _ => [(350., 150.), (800., 230.), (2200., 400.)],
     };
-    let mut amplitudes = [0.; 16];
+    let mut amplitudes = [0.; HARMONICS];
     for (h, a) in amplitudes.iter_mut().enumerate() {
         let f = (h + 1) as f32 * pitch;
         let peaks: f32 = formants
@@ -93,7 +95,7 @@ pub enum AnalysisError {
 pub struct Analysis {
     pub pitch: f32,
     pub confidence: f32,
-    pub amplitudes: [f32; 16],
+    pub amplitudes: [f32; HARMONICS],
 }
 pub fn analyze(samples: &[f32], sample_rate: f32) -> Result<Analysis, AnalysisError> {
     if samples.len() < 1024
@@ -107,39 +109,50 @@ pub fn analyze(samples: &[f32], sample_rate: f32) -> Result<Analysis, AnalysisEr
     if (energy / samples.len() as f64).sqrt() < 0.008 {
         return Err(AnalysisError::Quiet);
     }
-    let length = 8192.min(samples.len());
+    // Follow the local pitch instead of assuming a whole 170–190 ms frame is
+    // perfectly periodic. Real voices drift, even during a "steady" vowel.
+    let probe_length = (sample_rate * 0.06) as usize;
+    if samples.len() < probe_length {
+        return Err(AnalysisError::Unstable);
+    }
+    let hop = (sample_rate * 0.04) as usize;
     let mut frames = Vec::new();
-    for start in ((samples.len() as f32 * 0.2) as usize..=samples.len() - length)
-        .step_by((sample_rate * 0.12) as usize)
+    for start in
+        ((sample_rate * 0.2) as usize..=samples.len().saturating_sub(probe_length)).step_by(hop)
     {
-        if let Some((pitch, confidence)) =
-            detect_pitch(&samples[start..start + length], sample_rate)
-        {
-            if confidence > 0.85 {
-                frames.push((pitch, confidence, start));
+        let probe = &samples[start..start + probe_length];
+        let rms =
+            (probe.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / probe.len() as f64).sqrt();
+        if rms < 0.008 {
+            continue;
+        }
+        if let Some((pitch, confidence)) = detect_pitch(probe, sample_rate) {
+            if confidence < 0.85 {
+                continue;
             }
+            // Six periods separate adjacent harmonics while following vibrato.
+            let length = (6. * sample_rate / pitch).round() as usize;
+            let center = start + probe_length / 2;
+            let begin = center.saturating_sub(length / 2);
+            if begin + length > samples.len() {
+                continue;
+            }
+            let spectrum = harmonic_energy(&samples[begin..begin + length], sample_rate, pitch);
+            frames.push((pitch, confidence, spectrum));
         }
     }
     frames.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let &(pitch, confidence, start) = frames
+    let &(pitch, confidence, _) = frames
         .get(frames.len() / 2)
         .ok_or(AnalysisError::Unstable)?;
-    let frame = &samples[start..start + length];
-    let mut amplitudes = [0.; 16];
-    for (h, a) in amplitudes.iter_mut().enumerate() {
-        let frequency = pitch as f64 * (h + 1) as f64;
-        if frequency >= sample_rate as f64 / 2. {
-            continue;
-        }
-        let (mut real, mut imaginary) = (0., 0.);
-        for (i, sample) in frame.iter().enumerate() {
-            let windowed = *sample as f64
-                * (0.5 - 0.5 * (2. * PI * i as f64 / (frame.len() - 1) as f64).cos());
-            let angle = 2. * PI * frequency * i as f64 / sample_rate as f64;
-            real += windowed * angle.cos();
-            imaginary += windowed * angle.sin();
-        }
-        *a = real.hypot(imaginary) as f32;
+    // Discard octave mistakes and combine normalized spectra, so a loud attack
+    // or a single wobbly frame cannot erase the voice's characteristic overtones.
+    frames.retain(|frame| (frame.0 / pitch - 1.).abs() < 0.15);
+    let mut amplitudes = [0.; HARMONICS];
+    for (h, amplitude) in amplitudes.iter_mut().enumerate() {
+        let mut values: Vec<f32> = frames.iter().map(|frame| frame.2[h]).collect();
+        values.sort_by(f32::total_cmp);
+        *amplitude = values[values.len() / 2];
     }
     normalize(&mut amplitudes);
     Ok(Analysis {
@@ -147,6 +160,64 @@ pub fn analyze(samples: &[f32], sample_rate: f32) -> Result<Analysis, AnalysisEr
         confidence,
         amplitudes,
     })
+}
+
+fn harmonic_energy(samples: &[f32], sample_rate: f32, pitch: f32) -> [f32; HARMONICS] {
+    let n = (samples.len() * 2).next_power_of_two();
+    let mut real = vec![0.; n];
+    let mut imaginary = vec![0.; n];
+    let mean = samples.iter().map(|x| *x as f64).sum::<f64>() / samples.len() as f64;
+    for (i, sample) in samples.iter().enumerate() {
+        real[i] = (*sample as f64 - mean)
+            * (0.5 - 0.5 * (2. * PI * i as f64 / (samples.len() - 1) as f64).cos());
+    }
+    // Radix-2 FFT. Integrate power around each harmonic, not just its exact
+    // frequency: pitch motion spreads energy into nearby frequency bins.
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            real.swap(i, j);
+            imaginary.swap(i, j);
+        }
+    }
+    let mut size = 2;
+    while size <= n {
+        let angle = -2. * PI / size as f64;
+        let (step_im, step_re) = angle.sin_cos();
+        for start in (0..n).step_by(size) {
+            let (mut wr, mut wi) = (1., 0.);
+            for k in 0..size / 2 {
+                let even = start + k;
+                let odd = even + size / 2;
+                let tr = wr * real[odd] - wi * imaginary[odd];
+                let ti = wr * imaginary[odd] + wi * real[odd];
+                real[odd] = real[even] - tr;
+                imaginary[odd] = imaginary[even] - ti;
+                real[even] += tr;
+                imaginary[even] += ti;
+                (wr, wi) = (wr * step_re - wi * step_im, wr * step_im + wi * step_re);
+            }
+        }
+        size *= 2;
+    }
+    let mut amplitudes = [0.; HARMONICS];
+    for bin in 1..n / 2 {
+        let harmonic = (bin as f64 * sample_rate as f64 / n as f64 / pitch as f64).round() as usize;
+        if (1..=HARMONICS).contains(&harmonic) {
+            amplitudes[harmonic - 1] += (real[bin].powi(2) + imaginary[bin].powi(2)) as f32;
+        }
+    }
+    for amplitude in &mut amplitudes {
+        *amplitude = amplitude.sqrt();
+    }
+    normalize(&mut amplitudes);
+    amplitudes
 }
 // Raw WASM ABI. JS owns the lifetime of all buffers; no wasm-bindgen dependency.
 #[no_mangle]
@@ -160,20 +231,23 @@ pub unsafe extern "C" fn free_floats(ptr: *mut f32, len: usize) {
     drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
 }
 /// # Safety
-/// output must point to 16 writable floats.
+/// output must point to HARMONICS writable floats.
 #[no_mangle]
 pub unsafe extern "C" fn sample_vowel(kind: u32, pitch: f32, output: *mut f32) {
-    std::slice::from_raw_parts_mut(output, 16).copy_from_slice(&vowel(kind, pitch));
+    std::slice::from_raw_parts_mut(output, HARMONICS).copy_from_slice(&vowel(kind, pitch));
 }
 /// # Safety
-/// amplitudes must point to 16 readable floats; output to 128 writable floats.
+/// amplitudes must point to HARMONICS readable floats; output to WAVE_SAMPLES writable floats.
 #[no_mangle]
 pub unsafe extern "C" fn render_cycle(amplitudes: *const f32, output: *mut f32) {
-    let rendered = cycle(std::slice::from_raw_parts(amplitudes, 16), 128);
-    std::slice::from_raw_parts_mut(output, 128).copy_from_slice(&rendered);
+    let rendered = cycle(
+        std::slice::from_raw_parts(amplitudes, HARMONICS),
+        WAVE_SAMPLES,
+    );
+    std::slice::from_raw_parts_mut(output, WAVE_SAMPLES).copy_from_slice(&rendered);
 }
 /// # Safety
-/// input must point to len readable floats; output to 18 writable floats.
+/// input must point to len readable floats; output to HARMONICS + 2 writable floats.
 #[no_mangle]
 pub unsafe extern "C" fn analyze_voice(
     input: *const f32,
@@ -183,7 +257,7 @@ pub unsafe extern "C" fn analyze_voice(
 ) -> u32 {
     match analyze(std::slice::from_raw_parts(input, len), sample_rate) {
         Ok(result) => {
-            let out = std::slice::from_raw_parts_mut(output, 18);
+            let out = std::slice::from_raw_parts_mut(output, HARMONICS + 2);
             out[0] = result.pitch;
             out[1] = result.confidence;
             out[2..].copy_from_slice(&result.amplitudes);
@@ -245,7 +319,7 @@ mod tests {
     }
     #[test]
     fn sine_cycle_has_expected_quarters() {
-        let mut weights = [0.; 16];
+        let mut weights = [0.; HARMONICS];
         weights[0] = 1.;
         let result = cycle(&weights, 128);
         assert!((result[32] - 1.).abs() < 1e-6);

@@ -10,7 +10,7 @@ Inspired by [Handwired by Cheng Lou](https://github.com/chenglou/handwired).
 
 ### 1. Give it a little “ooo”
 
-Click **Record my voice**, allow your microphone, and sing one comfortable note for two seconds. Try “ooo”, “aaa”, or “eee”—hold the vowel instead of saying the word. No perfect pitch needed!
+Click **Record my voice**, allow your microphone, and sing one comfortable note for two seconds. Try a hum, “ooo”, “aaa”, “eee”, or your own unusual voiced tone—hold the sound instead of saying a word. The vowel samples are examples, not categories your recording is sorted into. No perfect pitch needed!
 
 You’ll see a countdown and a microphone meter while it listens. Your recording stays in your browser.
 
@@ -54,11 +54,11 @@ Open **Shape the sound** and move a few sliders. Some changes make the instrumen
 - **No sound?** Check your volume, then click **Hear instrument** or a piano key.
 - **Still sounds like the old instrument?** After selecting a sample, press **Train this sound** to teach it the new tone.
 
-Meloform makes a synth inspired by the character of one vowel. It won’t repeat your words or sound exactly like a recording of you singing.
+Meloform learns the harmonic character of a steady voiced sound, including unusual overtones. Breath noise, rasp, and changes over time are not reproduced faithfully by this harmonic-only model. It won’t repeat your words or sound exactly like a recording of you singing.
 
 ## How Handwired helps
 
-Think of the synth as a recipe with 16 sound ingredients. Rust first measures those ingredients in your voice. Handwired turns the synth into a trainable program: it compares the sound it makes with your target and works out how much to change each ingredient. The piano then plays the learned recipe at different pitches.
+Think of the synth as a recipe with 64 sound ingredients. Rust first measures those ingredients in your voice. Handwired turns the synth into a trainable program: it compares the sound it makes with your target and works out how much to change each ingredient. The piano then plays the learned recipe at different pitches.
 
 ## Run it on your computer
 
@@ -87,19 +87,19 @@ The repo selects Node.js 24 automatically. The build script installs Rust if nee
 
 ### Where Rust and Handwired fit
 
-- `crates/voice-dsp`: dependency-free Rust DSP compiled to `wasm32-unknown-unknown`. YIN-style pitch detection, Hann-windowed harmonic analysis, sample vowel construction, and reference waveform generation. A small raw WASM ABI handles float buffers; no wasm-bindgen required.
+- `crates/voice-dsp`: dependency-free Rust DSP compiled to `wasm32-unknown-unknown`. YIN-style pitch detection, short-frame FFT harmonic-energy analysis, sample vowel construction, and reference waveform generation. A small raw WASM ABI handles float buffers; no wasm-bindgen required.
 - `src/dsp.js`: memory-safe-at-the-call-site buffer ownership and WASM adapter.
-- `src/model.js`: the actual Handwired `Circuit`. Sixteen trainable source cells mix sinusoidal basis functions into a 128-sample waveform. Squared error is computed inside that circuit. `backpropagateReference` supplies gradients for projected gradient descent; locked coefficients are skipped.
+- `src/model.js`: the actual Handwired `Circuit`. Sixty-four trainable source cells mix sinusoidal basis functions into a 256-sample waveform. Squared error is computed inside that circuit. `backpropagateReference` supplies gradients for projected gradient descent; locked coefficients are skipped.
 - `src/audio.js` / `src/recorder.js`: browser microphone capture and Web Audio playback. Playback uses the learned harmonic coefficients in a band-limited `PeriodicWave`, with a short attack/release and master compressor.
 - `src/app.js`: interface, learning animation, locks, keyboard, and export.
 
-Pitch detection is outside the learned circuit. The recording's harmonic magnitudes are reconstructed with aligned phases, so training matches harmonic character rather than the raw voice waveform. Rust's reference waveform is separately checked against Handwired's forward synthesis. CPU-only; no pretrained model, server inference, or audio upload.
+Pitch detection is outside the learned circuit. Short frames track pitch changes; harmonic-band energy is combined across voiced frames to retain timbre during vibrato. The recording's harmonic magnitudes are reconstructed with aligned phases, so training matches harmonic character rather than the raw voice waveform. Rust's reference waveform is separately checked against Handwired's forward synthesis. CPU-only; no pretrained model, server inference, or audio upload.
 
 ### What the fit means
 
 The displayed fit is `100 * (1 - sqrt(waveform MSE / target mean-square energy))`, clamped to 0–100%. Because both waveforms use the same orthogonal sine basis, it measures relative error in harmonic amplitudes. It is not a perceptual rating or voice-cloning score. The scope uses a shared display scale; listening uses normalized periodic waves.
 
-This first experiment models a single steady vowel using 16 harmonics. It does not model breath, consonants, vibrato, changing formants, or speech. It estimates pitches from about 65–600 Hz. Sample vowels are synthetic. There is no claim that gradient descent is necessary for this simple linear fit: the point is to make Handwired's programmed-to-trainable transition visible and audible.
+This first experiment models a single steady vowel using 64 harmonics. It does not model breath, consonants, vibrato, changing formants, or speech. It estimates pitches from about 65–600 Hz. Sample vowels are synthetic. There is no claim that gradient descent is necessary for this simple linear fit: the point is to make Handwired's programmed-to-trainable transition visible and audible.
 
 ### Tests and static build
 

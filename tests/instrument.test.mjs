@@ -62,3 +62,35 @@ test('silence and nonperiodic noise are rejected', () => {
   const noise=Float32Array.from({length:96000},()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0; return (seed/4294967296-.5)*.3;});
   assert.throws(() => analyze(noise,48000), /steady note/);
 });
+
+test('recorded vowels retain their harmonics with vibrato, drift, and an uneven onset', () => {
+  for (const kind of ['oo','aa','ee']) {
+    const sampleRate=48000, pitch=196, target=vowel(kind,pitch); let phase=0;
+    const samples=Float32Array.from({length:sampleRate*2},(_,i)=>{
+      const t=i/sampleRate;
+      phase+=2*Math.PI*pitch*(1+.02*Math.sin(2*Math.PI*5*t)+.006*(t-1))/sampleRate;
+      const envelope=Math.min(1,t/.3) * (.8+.2*Math.sin(2*Math.PI*1.7*t));
+      return envelope*target.reduce((sum,a,h)=>sum+.1*a*Math.sin((h+1)*phase+h*.23),0);
+    });
+    const result=analyze(samples,sampleRate);
+    assert.ok(Math.abs(result.pitch-pitch)<6);
+    assert.ok(result.amplitudes.every((a,h)=>Math.abs(a-target[h])<.08),`${kind}: vibrato must not erase upper harmonics`);
+    const instrument=new Instrument(); instrument.setTarget(result.amplitudes);
+    for(let i=0;i<200;i++) instrument.train();
+    assert.ok(instrument.weights.every((a,h)=>Math.abs(a-target[h])<.08));
+  }
+});
+
+test('a custom low-pitched timbre retains strong overtones beyond the old 16-harmonic limit', () => {
+  const sampleRate=44100,pitch=110,target=new Float32Array(64);
+  target[0]=.7; target[1]=.25; target[5]=.4; target[23]=.65; target[31]=.85; target[42]=.5;
+  let phase=0,seed=17;
+  const samples=Float32Array.from({length:sampleRate*2},(_,i)=>{
+    phase+=2*Math.PI*pitch*(1+.01*Math.sin(2*Math.PI*4*i/sampleRate))/sampleRate;
+    seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+    return target.reduce((sum,a,h)=>sum+.12*a*Math.sin((h+1)*phase+.37*h),0)+(seed/4294967296-.5)*.002;
+  });
+  const result=analyze(samples,sampleRate);
+  assert.ok(Math.abs(result.pitch-pitch)<3);
+  for(const h of [0,1,5,23,31,42]) assert.ok(Math.abs(result.amplitudes[h]-target[h])<.09,`harmonic ${h+1}: ${result.amplitudes[h]}`);
+});

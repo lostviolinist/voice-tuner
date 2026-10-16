@@ -19,12 +19,12 @@ function run(input, outputSize, action) {
     return new Float32Array(wasm.memory.buffer,outputPtr,outputSize).slice();
   } finally { if (input) wasm.free_floats(inputPtr,input.length); wasm.free_floats(outputPtr,outputSize); }
 }
-export function vowel(kind='oo',pitch=196) { return run(null,16,(_,out) => { wasm.sample_vowel({oo:0,aa:1,ee:2}[kind]??0,pitch,out); return 0; }); }
+export function vowel(kind='oo',pitch=196) { return run(null,64,(_,out) => { wasm.sample_vowel({oo:0,aa:1,ee:2}[kind]??0,pitch,out); return 0; }); }
 export function cycle(amplitudes) {
-  if (amplitudes.length!==16) throw new Error('Expected 16 harmonics');
-  return run(amplitudes,128,(input,out) => { wasm.render_cycle(input,out); return 0; });
+  if (amplitudes.length!==64) throw new Error('Expected 64 harmonics');
+  return run(amplitudes,256,(input,out) => { wasm.render_cycle(input,out); return 0; });
 }
 export function analyze(samples,sampleRate) {
-  const result=run(samples,18,(input,out)=>wasm.analyze_voice(input,samples.length,sampleRate,out));
+  const result=run(samples,66,(input,out)=>wasm.analyze_voice(input,samples.length,sampleRate,out));
   return {pitch:result[0],confidence:result[1],amplitudes:result.slice(2)};
 }
