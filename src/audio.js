@@ -1,3 +1,4 @@
+import { prepareVoiceSample, samplePlaybackRate } from './voice-sample.js';
 export class AudioEngine {
   constructor() { this.voices = new Map(); this.level = .22; }
   async ready() {
@@ -14,15 +15,31 @@ export class AudioEngine {
     for (let i = 0; i < weights.length; i++) if ((i + 1) * frequency < this.context.sampleRate / 2) imaginary[i + 1] = weights[i];
     return this.context.createPeriodicWave(real, imaginary);
   }
-  note(id, frequency, weights) {
-    if (this.voices.has(id)) return;
-    const oscillator = this.context.createOscillator(), gain = this.context.createGain();
-    oscillator.frequency.value = frequency; oscillator.setPeriodicWave(this.wave(weights, frequency));
-    gain.gain.setValueAtTime(0, this.context.currentTime); gain.gain.linearRampToValueAtTime(.28, this.context.currentTime + .035);
-    oscillator.connect(gain).connect(this.master); oscillator.start();
-    this.voices.set(id, { oscillator, gain, frequency });
+  setVoiceRecording(recording, pitch) {
+    this.voiceSample = prepareVoiceSample(recording.samples, recording.sampleRate, pitch);
+    this.voiceBuffer = this.context.createBuffer(1, this.voiceSample.samples.length, recording.sampleRate);
+    this.voiceBuffer.copyToChannel(this.voiceSample.samples, 0);
+    return this.voiceSample;
   }
-  update(weights) { for (const voice of this.voices.values()) voice.oscillator.setPeriodicWave(this.wave(weights, voice.frequency)); }
+  clearVoiceRecording() { this.voiceSample = null; this.voiceBuffer = null; }
+  note(id, frequency, weights, mode = 'synth') {
+    if (this.voices.has(id)) return;
+    const gain = this.context.createGain();
+    let oscillator, level = .28;
+    if (mode === 'voice') {
+      if (!this.voiceBuffer) throw new Error('Record your voice before choosing Voice mode.');
+      oscillator = this.context.createBufferSource(); oscillator.buffer = this.voiceBuffer; oscillator.loop = true;
+      oscillator.playbackRate.value = samplePlaybackRate(this.voiceSample, frequency);
+      level *= this.voiceSample.gain;
+    } else {
+      oscillator = this.context.createOscillator();
+      oscillator.frequency.value = frequency; oscillator.setPeriodicWave(this.wave(weights, frequency));
+    }
+    gain.gain.setValueAtTime(0, this.context.currentTime); gain.gain.linearRampToValueAtTime(level, this.context.currentTime + .015);
+    oscillator.connect(gain).connect(this.master); oscillator.start();
+    this.voices.set(id, { oscillator, gain, frequency, mode });
+  }
+  update(weights) { for (const voice of this.voices.values()) if (voice.mode === 'synth') voice.oscillator.setPeriodicWave(this.wave(weights, voice.frequency)); }
   stop(id) {
     const voice = this.voices.get(id); if (!voice) return;
     voice.gain.gain.cancelScheduledValues(this.context.currentTime);
