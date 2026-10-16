@@ -4,6 +4,7 @@ import { AudioEngine } from './audio.js';
 import { initDSP } from './dsp.js';
 import { keyboardLayout, typedNote, pianoNoteName } from './keyboard-layout.js';
 import { encodeWav } from './voice-sample.js';
+import { VoiceToneTrainer } from './voice-tone-trainer.js';
 try { await initDSP(); }
 catch (error) {
   document.getElementById('status').textContent = error.message;
@@ -14,6 +15,15 @@ const $ = id => document.getElementById(id);
 const model = new Instrument(), audio = new AudioEngine(), locks = new Set();
 let target = vowel('oo'), pitch = 196, training = false, busy = false, recorded = null, audition = null, auditionTimer, epoch = 0;
 let baseline = 1, currentLoss = 1, playbackMode = 'synth';
+let toneState = {state:'idle'};
+const voiceTrainer = new VoiceToneTrainer(update => {
+  toneState = update;
+  if (update.state === 'ready') {
+    audio.setVoiceCorrections(update.notes);
+    $('voice-note-status').textContent = 'Play a note to try the learned correction.';
+  }
+  updateVoiceToneUI();
+});
 const sliders = [], markers = [];
 const held = new Map(), keyElements = new Map(), guideElements = new Map();
 const noteName = frequency => {
@@ -32,6 +42,46 @@ function stopAudition() {
   }
 }
 function silence() { epoch++; held.clear(); stopAudition(); audio.stopAll(); document.querySelectorAll('.key.active, .typing-guide-key.active').forEach(key => key.classList.remove('active')); }
+function updateVoiceToneUI() {
+  $('voice-learning').hidden = !recorded || playbackMode !== 'voice';
+  $('voice-correction').disabled = busy || toneState.state !== 'ready' || !toneState.accepted;
+  $('voice-correction').checked = audio.voiceCorrectionEnabled && toneState.accepted > 0;
+  $('voice-teach').disabled = busy || toneState.state === 'learning';
+  $('voice-higher').disabled = busy;
+  $('voice-training-progress').hidden = toneState.state !== 'learning';
+  $('voice-training-progress').value = toneState.done || 0;
+  $('voice-training-progress').max = toneState.total || 25;
+  $('voice-teach').textContent = toneState.state === 'learning' ? 'Learning your tone…' : 'Teach my voice again';
+  $('voice-tone-status').textContent = toneState.state === 'learning'
+    ? `Handwired is learning how to keep your tone across nearby notes (${toneState.done}/${toneState.total}). You can play while it learns.`
+    : toneState.state === 'ready'
+      ? toneState.accepted
+        ? `Ready! Learned range: ${pianoNoteName(toneState.low)}–${pianoNoteName(toneState.high)}. Toggle “Keep my tone” and try the higher note to compare. Beyond this range, notes use plain transposition.`
+        : 'The learned filters did not improve the measured tone enough, so your recording is playing unchanged. Try another steady sound.'
+      : toneState.state === 'error'
+        ? 'Tone learning could not finish. Your recorded instrument still works—try teaching it again.'
+        : 'Teach Handwired to keep more of your tone when the pitch changes.';
+  $('voice-tone-details').textContent = toneState.state === 'ready'
+    ? `${toneState.accepted} of ${toneState.high - toneState.low + 1} notes use a learned filter. Average spectral-shape error on a separate part of the recording: ${toneState.before.toFixed(2)} → ${toneState.after.toFixed(2)} dB (lower is better). This measures a smoothed spectrum, not voice identity or listening quality. Notes without an improvement keep the original sample.`
+    : 'Handwired learns 20 filter controls per note. Corrections are tested on a separate part of the recording and used only when the measured spectral shape improves. Your actual recording remains the sound source.';
+}
+function teachVoice() {
+  if (!recorded || busy) return;
+  silence(); audio.clearVoiceCorrections();
+  $('voice-note-status').textContent = '';
+  voiceTrainer.start(audio.voiceSample);
+}
+function showVoiceNote(frequency) {
+  const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
+  const correction = audio.voiceCorrectionFor(frequency);
+  $('voice-note-status').textContent = `${pianoNoteName(midi)} · ${correction?.buffer ? 'Handwired tone correction' : !audio.voiceCorrectionEnabled ? 'Plain transposition' : correction ? 'Original sample · no correction applied' : 'Outside the learned range · plain transposition'}`;
+}
+$('voice-teach').addEventListener('click', teachVoice);
+$('voice-correction').addEventListener('change', event => {
+  silence(); audio.voiceCorrectionEnabled = event.target.checked;
+  $('voice-note-status').textContent = 'Play a note to hear the change.';
+});
+$('voice-higher').addEventListener('click', () => listen('voice', {toggle:false, frequency:440 * 2 ** ((Math.min(108, audio.voiceSample.rootMidi + 7) - 69) / 12)}));
 function updatePlaybackUI() {
   $('mode-voice').disabled = !recorded || busy;
   $('mode-synth').disabled = busy;
@@ -39,16 +89,17 @@ function updatePlaybackUI() {
   $('mode-synth').setAttribute('aria-pressed', String(playbackMode === 'synth'));
   $('voice-preview').hidden = !recorded || playbackMode !== 'voice';
   $('mode-help').textContent = playbackMode === 'voice'
-    ? 'Your recorded texture, automatically tuned and played at each key’s pitch. Farther from your sung note, the voice’s color changes too.'
+    ? 'Your actual recording, tuned to each key. Handwired learns filters that help keep its tonal color as the pitch changes.'
     : 'Handwired’s learned harmonic approximation. This mode leaves out the recording’s breath, phase, and changing texture.';
   $('play-hint').textContent = playbackMode === 'voice'
-    ? 'Voice mode is ready. Play the piano or use your computer keyboard—no training is needed for this mode.'
+    ? 'Play the piano or use your computer keyboard. Your voice is playable immediately; learned tone correction becomes available when ready.'
     : training ? 'The synth is learning. Play the piano to hear it change.' : 'The piano plays the learned synth. Record a voice or train a sample to change its tone.';
-  $('save').textContent = playbackMode === 'voice' ? '↓ Save voice sample' : '↓ Save synth recipe';
+  $('save').textContent = playbackMode === 'voice' ? '↓ Save original voice sample' : '↓ Save synth recipe';
   if (recorded && audio.voiceSample) {
     $('voice-root').textContent = `Tuned to ${pianoNoteName(audio.voiceSample.rootMidi)} · ${Math.round(audio.voiceSample.rootFrequency)} Hz`;
     drawVoice();
   }
+  updateVoiceToneUI();
 }
 function setPlaybackMode(mode) {
   if (busy || (mode === 'voice' && !recorded)) return;
@@ -62,10 +113,9 @@ function drawVoice() {
   const data=audio.voiceSample.samples, length=Math.min(data.length,Math.round(audio.voiceSample.sampleRate*.04));
   let peak=.001; for(let i=0;i<length;i++) peak=Math.max(peak,Math.abs(data[i]));
   ctx.strokeStyle='#392c42'; ctx.lineWidth=1; ctx.beginPath();
-  for(let x=0;x<Math.floor(box.width);x++) {
-    const from=Math.floor(x/box.width*length), to=Math.max(from+1,Math.floor((x+1)/box.width*length));
-    let low=1,high=-1; for(let i=from;i<to;i++){low=Math.min(low,data[i]);high=Math.max(high,data[i]);}
-    ctx.moveTo(x,box.height/2-low/peak*box.height*.42); ctx.lineTo(x,box.height/2-high/peak*box.height*.42);
+  for(let i=0;i<length;i++) {
+    const x=i/(length-1)*box.width, y=box.height/2-data[i]/peak*box.height*.42;
+    if (i) ctx.lineTo(x,y); else ctx.moveTo(x,y);
   }
   ctx.stroke();
 }
@@ -137,7 +187,7 @@ function startLearning(mode = 'synth') {
   if (locks.size === HARMONICS) { status('All harmonics are locked. Unlock at least one to teach the synth.'); return; }
   setPlaybackMode(mode); model.steps = 0; setTraining(true); updatePlaybackUI();
   listen(mode, { toggle:false, durationMs:mode === 'voice' ? 2500 : 8000 });
-  status(mode === 'voice' ? 'You’re hearing your recorded Voice instrument. Handwired is learning a separate synth approximation.' : 'Listen as Handwired learns the harmonic target. The piano plays the learned synth.');
+  status(mode === 'voice' ? 'Your Voice instrument is ready to play. Handwired also learns tone correction below and this separate synth approximation.' : 'Listen as Handwired learns the harmonic target. The piano plays the learned synth.');
 }
 $('train').addEventListener('click', () => {
   if (training) { setTraining(false); stopAudition(); status('Learning paused. Play the current sound, or keep teaching.'); }
@@ -145,7 +195,7 @@ $('train').addEventListener('click', () => {
 });
 $('reset').addEventListener('click', () => { setTraining(false); setPlaybackMode('synth'); model.reset(); $('play-hint').textContent = 'The piano is back to a simple tone. Press Train this sound to learn your target again.'; sync(); status('Back to a simple tone. Your target and locks are kept.'); });
 document.querySelectorAll('[data-vowel]').forEach(button => button.addEventListener('click', () => {
-  if (busy) return; recorded = null; audio.clearVoiceRecording(); setPlaybackMode('synth'); $('listen-original').hidden = true; $('listen-voice').hidden = true;
+  if (busy) return; voiceTrainer.cancel(); toneState = {state:'idle'}; recorded = null; audio.clearVoiceRecording(); setPlaybackMode('synth'); $('listen-original').hidden = true; $('listen-voice').hidden = true;
   captureStatus('Record a steady vowel. Learning and playback start automatically.');
   document.querySelectorAll('[data-vowel]').forEach(other => { other.classList.toggle('selected', other===button); other.setAttribute('aria-pressed', String(other===button)); });
   setTarget(vowel(button.dataset.vowel), 196, `TARGET: SAMPLE ${button.dataset.vowel.toUpperCase()}${button.dataset.vowel[0].toUpperCase()}`);
@@ -155,6 +205,8 @@ document.querySelectorAll('[data-vowel]').forEach(button => button.addEventListe
 $('record').addEventListener('click', async () => {
   if (busy) return;
   busy = true; silence(); setTraining(false);
+  voiceTrainer.cancel(); if (toneState.state === 'learning') toneState = {state:'error'};
+  updateVoiceToneUI();
   const controls = document.querySelectorAll('#record, #train, #reset, [data-vowel], .listen-row button, .playback-modes button, #save');
   let captured = false;
   controls.forEach(button => button.disabled = true);
@@ -177,6 +229,7 @@ $('record').addEventListener('click', async () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     const result = analyze(recording.samples, recording.sampleRate);
     audio.setVoiceRecording(recording, result.pitch);
+    toneState = {state:'idle'}; $('voice-note-status').textContent = '';
     recorded = recording; playbackMode = 'voice';
     setTarget(result.amplitudes, result.pitch, 'TARGET: YOUR VOICE');
     document.querySelectorAll('[data-vowel]').forEach(button => { button.classList.remove('selected'); button.setAttribute('aria-pressed','false'); });
@@ -187,9 +240,12 @@ $('record').addEventListener('click', async () => {
     const message = error.name === 'NotAllowedError' ? 'Microphone access wasn’t granted. Allow access in your browser and record again, or try a sample.' : error.name === 'NotFoundError' ? 'No microphone was found. Connect one, or try a sample sound.' : error.name === 'NotReadableError' ? 'The microphone could not start. Check your microphone input or close other apps using it, then try again.' : error.message;
     captureStatus(message, true); status(message);
   } finally { busy = false; controls.forEach(button => button.disabled = false); $('record-text').textContent = captured ? 'Record again' : 'Record my voice'; $('record').classList.remove('recording'); $('capture-meter').hidden = true; updatePlaybackUI(); }
-  if (captured) { if (locks.size < HARMONICS) startLearning('voice'); else listen('voice', {toggle:false}); }
+  if (captured) {
+    teachVoice();
+    if (locks.size < HARMONICS) startLearning('voice'); else listen('voice', {toggle:false});
+  }
 });
-async function listen(kind, { toggle = true, durationMs = 3000 } = {}) {
+async function listen(kind, { toggle = true, durationMs = 3000, frequency } = {}) {
   if (busy) return;
   const was = audition; silence(); if (toggle && was === kind) return;
   const ticket = epoch;
@@ -198,7 +254,11 @@ async function listen(kind, { toggle = true, durationMs = 3000 } = {}) {
     audition = kind; $(`listen-${kind}`).classList.add('active');
     $(`listen-${kind}`).textContent = `■ Playing ${kind === 'original' ? 'recording' : kind === 'synth' ? 'learned synth' : kind === 'voice' ? 'voice instrument' : 'target tone'} · stop`;
     if (kind === 'original' && recorded) await audio.playRecording(recorded.samples, recorded.sampleRate);
-    else audio.note('audition', kind === 'voice' ? audio.voiceSample.rootFrequency : pitch, kind === 'target' ? target : model.weights, kind === 'voice' ? 'voice' : 'synth');
+    else {
+      const hz = kind === 'voice' ? frequency || audio.voiceSample.rootFrequency : pitch;
+      audio.note('audition', hz, kind === 'target' ? target : model.weights, kind === 'voice' ? 'voice' : 'synth');
+      if (kind === 'voice') showVoiceNote(hz);
+    }
     auditionTimer = setTimeout(stopAudition, kind === 'original' ? 2100 : durationMs);
   } catch (error) { status(`Audio couldn’t start: ${error.message}`); stopAudition(); }
 }
@@ -217,6 +277,7 @@ async function startNote(midi, id) {
   try {
     await audio.ready(); if (held.get(id) !== note || ticket !== epoch) return;
     stopAudition(); audio.note(id, frequencyFor(midi), model.weights, playbackMode); refreshKey(midi);
+    if (playbackMode === 'voice') showVoiceNote(frequencyFor(midi));
   } catch (error) { if (held.get(id) === note) held.delete(id); refreshKey(midi); status(`Audio couldn’t start: ${error.message}`); }
 }
 function stopNote(id) {
@@ -301,7 +362,7 @@ $('save').addEventListener('click', () => {
   const url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url;
   a.download=voice ? `meloform-voice-${voice.sourcePitch.toFixed(1)}hz.wav` : 'my-meloform-synth.json';
   a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
-  status(voice ? `Saved your recorded voice loop as WAV at its original ${voice.sourcePitch.toFixed(1)} Hz pitch.` : 'Saved the learned synth recipe as JSON, without your recording.');
+  status(voice ? `Saved your recorded voice loop as WAV at its original ${voice.sourcePitch.toFixed(1)} Hz pitch, without the per-note learned filters.` : 'Saved the learned synth recipe as JSON, without your recording.');
 });
 new ResizeObserver(() => { draw(model.evaluate().waveform); drawVoice(); }).observe($('scope'));
 setTarget(target,pitch,'TARGET: SAMPLE OOO');

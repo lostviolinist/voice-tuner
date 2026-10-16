@@ -1,6 +1,6 @@
 import { prepareVoiceSample, samplePlaybackRate } from './voice-sample.js';
 export class AudioEngine {
-  constructor() { this.voices = new Map(); this.level = .22; }
+  constructor() { this.voices = new Map(); this.level = .22; this.voiceCorrections = new Map(); this.voiceCorrectionEnabled = false; }
   async ready() {
     if (!this.context) {
       this.context = new AudioContext();
@@ -17,18 +17,39 @@ export class AudioEngine {
   }
   setVoiceRecording(recording, pitch) {
     this.voiceSample = prepareVoiceSample(recording.samples, recording.sampleRate, pitch);
+    this.clearVoiceCorrections();
     this.voiceBuffer = this.context.createBuffer(1, this.voiceSample.samples.length, recording.sampleRate);
     this.voiceBuffer.copyToChannel(this.voiceSample.samples, 0);
     return this.voiceSample;
   }
-  clearVoiceRecording() { this.voiceSample = null; this.voiceBuffer = null; }
+  clearVoiceCorrections() { this.voiceCorrections.clear(); this.voiceCorrectionEnabled = false; }
+  setVoiceCorrections(notes) {
+    this.clearVoiceCorrections();
+    for (const [midi, note] of notes) {
+      let buffer = null;
+      if (note.accepted && note.samples) {
+        buffer = this.context.createBuffer(1, note.samples.length, this.voiceSample.sampleRate);
+        buffer.copyToChannel(note.samples, 0);
+      }
+      this.voiceCorrections.set(midi, {buffer});
+    }
+    this.voiceCorrectionEnabled = Array.from(this.voiceCorrections.values()).some(note => note.buffer);
+  }
+  voiceCorrectionFor(frequency) {
+    if (!this.voiceCorrectionEnabled) return null;
+    const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
+    // Only use the filter at the exact piano pitch it was trained for.
+    if (Math.abs(1200 * Math.log2(frequency / (440 * 2 ** ((midi - 69) / 12)))) > .1) return null;
+    return this.voiceCorrections.get(midi) || null;
+  }
+  clearVoiceRecording() { this.voiceSample = null; this.voiceBuffer = null; this.clearVoiceCorrections(); }
   note(id, frequency, weights, mode = 'synth') {
     if (this.voices.has(id)) return;
     const gain = this.context.createGain();
     let oscillator, level = .28;
     if (mode === 'voice') {
       if (!this.voiceBuffer) throw new Error('Record your voice before choosing Voice mode.');
-      oscillator = this.context.createBufferSource(); oscillator.buffer = this.voiceBuffer; oscillator.loop = true;
+      oscillator = this.context.createBufferSource(); oscillator.buffer = this.voiceCorrectionFor(frequency)?.buffer || this.voiceBuffer; oscillator.loop = true;
       oscillator.playbackRate.value = samplePlaybackRate(this.voiceSample, frequency);
       level *= this.voiceSample.gain;
     } else {

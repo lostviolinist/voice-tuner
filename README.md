@@ -18,13 +18,17 @@ You’ll see a countdown and a microphone meter while it listens. Your recording
 
 ### 2. Keep your voice—or teach a synth
 
-After recording, the piano defaults to **Voice**. It keeps a short loop of your actual recording, including its phase and texture. Your detected pitch is tuned to the nearest note; each piano key transposes that same sample to its own pitch. No training is needed for Voice playback.
+After recording, the piano defaults to **Voice**. It keeps a short loop of your actual recording, including its phase and texture. Your detected pitch is tuned to the nearest note; each piano key transposes that same sample to its own pitch. You can play immediately. In the background, Handwired learns how to keep more of your tone as the notes change.
 
-**Learned synth** is the Handwired experiment. It learns 64 harmonic amplitudes from your recording and produces a simpler, steady tone. Training still runs after recording so you can compare both modes. Click **Original recording**, **Hear voice instrument**, and **Hear learned synth** to hear the difference.
+Once it’s ready, **Keep my tone** switches on the learned correction. Click **Try a higher note**, turn the switch off, and play it again to compare. The first version learns notes within one octave above and below your sung note; the app shows that range. Outside it, you still get ordinary sample playback.
+
+Handwired learns a small filter for each note. We only keep filters that improve a measured tone comparison on a separate part of your recording. Some notes—especially your original note—may need no correction. **Teach my voice again** reruns this learning.
+
+**Learned synth** is a separate Handwired experiment. It learns 64 harmonic amplitudes from your recording and produces a simpler, steady tone. Training still runs after recording so you can compare both modes. Click **Original recording**, **Hear voice instrument**, and **Hear learned synth** to hear the difference.
 
 The wave comparison and **model fit** score apply only to the simplified harmonic model. A high score does **not** mean the synth sounds just like your original voice. Voice mode has its own preview of the actual recorded waveform.
 
-Voice playback uses sample transposition: far above or below your sung note, the vocal color and the speed of its fluctuations change too. It is not formant-preserving voice cloning.
+Voice playback still uses sample transposition. The learned filters aim to reduce changes in tonal color, but they cannot recreate missing harmonics or keep vibrato and breath fluctuations at their original speed. A lower measured spectral error is not proof that a voice sounds more like you. This is experimental tone correction, not full formant-preserving synthesis or voice cloning.
 
 ### 3. Play a melody—or a whole piece
 
@@ -49,7 +53,7 @@ Same melody. Your own little voice-instrument. ♡
 
 Open **Shape the sound** and move a few sliders. Some changes make the instrument softer; others make it brighter or buzzier. Click a slider’s number to lock it, then train again and hear what happens when the synth has to work around your choices.
 
-**Reset to simple tone** gives the learned synth a fresh starting sound. Sliders affect Learned synth, not Voice playback. **Save voice sample** downloads your recorded loop as a WAV file with its original pitch in the filename. **Save synth recipe** downloads harmonic settings as JSON, without audio. Importing either file back into the app isn’t supported yet.
+**Reset to simple tone** gives the learned synth a fresh starting sound. The harmonic sliders affect Learned synth. Voice mode uses its own learned filters and **Keep my tone** switch. **Save original voice sample** downloads your uncorrected recorded loop as a WAV file with its original pitch in the filename. Per-note learned filters are not included in that WAV. **Save synth recipe** downloads harmonic settings as JSON, without audio. Importing either file back into the app isn’t supported yet.
 
 ## If it doesn’t sound right
 
@@ -62,7 +66,7 @@ Voice mode retains the texture in the sampled recording and repeats a short loop
 
 ## How Handwired helps
 
-Think of the synth as a recipe with 64 sound ingredients. Rust first measures those ingredients in your voice. Handwired turns the synth into a trainable program: it compares the sound it makes with your target and works out how much to change each ingredient. The piano can play that learned recipe in Learned synth mode. Voice mode instead transposes recorded audio directly; Handwired is not used for that playback path.
+Think of the synth as a recipe with 64 sound ingredients. Rust first measures those ingredients in your voice. Handwired turns the synth into a trainable program: it compares the sound it makes with your target and works out how much to change each ingredient. The piano can play that learned recipe in Learned synth mode. Voice mode uses a second Handwired program: it learns smooth tone-correction filters for nearby notes by comparing the recording’s broad frequency shape before and after transposition. Those learned filters are applied to your actual recorded audio. Handwired does real backpropagation in both modes; it is not a pretrained voice model.
 
 ## Run it on your computer
 
@@ -94,6 +98,8 @@ The repo selects Node.js 24 automatically. The build script installs Rust if nee
 - `crates/voice-dsp`: dependency-free Rust DSP compiled to `wasm32-unknown-unknown`. YIN-style pitch detection, short-frame FFT harmonic-energy analysis, sample vowel construction, and reference waveform generation. A small raw WASM ABI handles float buffers; no wasm-bindgen required.
 - `src/dsp.js`: memory-safe-at-the-call-site buffer ownership and WASM adapter.
 - `src/model.js`: the actual Handwired `Circuit`. Sixty-four trainable source cells mix sinusoidal basis functions into a 256-sample waveform. Squared error is computed inside that circuit. `backpropagateReference` supplies gradients for projected gradient descent; locked coefficients are skipped.
+- `src/voice-tone.js`: a second Handwired Circuit learns 20 bounded filter gains per note by gradient descent on 48 smoothed spectral-envelope measurements, with gain and smoothness penalties. Circular STFT filtering renders the learned curves onto the actual recording. Training uses the first half of the loop; acceptance requires at least 1% lower spectral-shape error on the rendered second half. PCM is RMS-matched and peak-limited, and the original sample is retained for bypass and fallback.
+- `src/voice-tone-worker.js` / `src/voice-tone-trainer.js`: learn the 25 nearby semitone notes in a cancellable background worker; old recording jobs cannot replace a new voice. Playback uses pre-rendered buffers without running training on the audio thread.
 - `src/voice-sample.js`: selects a recorded PCM loop, crossfades its seam, calculates tuning from measured pitch, and exports WAV. Voice playback uses an AudioBufferSourceNode at target-frequency / detected-frequency; no harmonic reconstruction.
 - `src/audio.js` / `src/recorder.js`: browser microphone capture and Web Audio playback. Voice playback uses a looping audio buffer; learned synth playback uses harmonic coefficients in a band-limited `PeriodicWave`. Both have a short attack/release and master compressor.
 - `src/app.js`: interface, learning animation, locks, keyboard, and export.
@@ -104,7 +110,7 @@ Pitch detection is outside the learned circuit. Short frames track pitch changes
 
 The displayed fit is `100 * (1 - sqrt(waveform MSE / target mean-square energy))`, clamped to 0–100%. Because both waveforms use the same orthogonal sine basis, it measures relative error in harmonic amplitudes. It is not a perceptual rating or voice-cloning score. The scope uses a shared display scale; listening uses normalized periodic waves.
 
-This first experiment models a single steady vowel using 64 harmonics. It does not model breath, consonants, vibrato, changing formants, or speech. It estimates pitches from about 65–600 Hz. Sample vowels are synthetic. There is no claim that gradient descent is necessary for this simple linear fit: the point is to make Handwired's programmed-to-trainable transition visible and audible.
+Learned synth models a single steady vowel using 64 harmonics. It does not model breath, consonants, vibrato, changing formants, or speech. Voice mode retains a recorded loop, with experimental learned tone correction within one octave of the root. It cannot infer how a person would actually sing each new note. It estimates pitches from about 65–600 Hz. Sample vowels are synthetic. Neither fit requires a pretrained model; conventional fitting methods could also solve these small optimization problems. Handwired supplies the differentiable programs and gradients used here, making its programmed-to-trainable transition visible and audible.
 
 ### Tests and static build
 
@@ -116,7 +122,7 @@ npm run build
 
 `dist/` contains the static site, WASM binary, and transpiled Handwired runtime. Serve it with any static host over HTTPS. All asset URLs are relative, so subdirectory hosting works. `CARGO` can override the cargo executable. `PORT` can override the development server port.
 
-Tests exercise pitch and harmonic recovery at multiple sample rates, rejection of silence/noise, actual WASM integration, agreement with Handwired's synthesis, convergence, and locked parameters. Automated synthetic audio tests do not replace testing your physical microphone.
+Tests exercise pitch and harmonic recovery at multiple sample rates, rejection of silence/noise, actual WASM integration, agreement with Handwired's synthesis, convergence, and locked parameters. Voice-mode tests cover real backpropagation, held-out rendered spectral improvement across three artificial timbres and two sample rates, level matching, neutral-filter reconstruction, corrected/bypassed/out-of-range playback, and cancellation of stale learning jobs. Automated synthetic audio tests do not replace testing your physical microphone.
 
 A GitHub Actions template is included at `scripts/github-actions-check.yml`. Move it to `.github/workflows/check.yml` to enable CI using a credential with permission to manage workflows.
 

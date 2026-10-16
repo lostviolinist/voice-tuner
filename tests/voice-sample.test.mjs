@@ -48,6 +48,21 @@ test('voice mode uses a looping audio buffer; synth updates cannot replace it wi
   assert.equal(sources[2].waveUpdates,2);
   engine.stop('a'); assert.equal(sources[0].stopped,true);assert.equal(engine.voices.has('b'),true);
   engine.stopAll();assert.equal(engine.voices.size,0);
+  const corrected = voice.samples.map(value => -value);
+  engine.setVoiceCorrections(new Map([[voice.rootMidi, {accepted:true, samples:corrected}], [voice.rootMidi + 1, {accepted:false}]]));
+  engine.note('corrected', voice.rootFrequency, [], 'voice');
+  assert.deepEqual(sources[3].buffer.data, corrected);
+  assert.equal(sources[3].playbackRate.value, voice.rootFrequency / pitch);
+  engine.note('outside', voice.rootFrequency * 4, [], 'voice');
+  assert.deepEqual(sources[4].buffer.data, voice.samples);
+  engine.note('rejected', voice.rootFrequency * 2 ** (1/12), [], 'voice');
+  assert.deepEqual(sources[5].buffer.data, voice.samples);
+  engine.voiceCorrectionEnabled = false;
+  engine.note('bypass', voice.rootFrequency, [], 'voice');
+  assert.deepEqual(sources[6].buffer.data, voice.samples);
+  engine.stopAll(); engine.setVoiceRecording({samples:recording(),sampleRate:rate},pitch);
+  assert.equal(engine.voiceCorrections.size, 0);
+  assert.equal(engine.voiceCorrectionEnabled, false);
 });
 test('voice WAV export contains PCM samples rather than a harmonic recipe',()=>{
   const wav=encodeWav(new Float32Array([-1,0,1]),rate),view=new DataView(wav);

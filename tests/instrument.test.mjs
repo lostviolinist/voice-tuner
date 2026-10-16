@@ -4,6 +4,8 @@ import { build } from '../scripts/build.mjs';
 import { readFile } from 'node:fs/promises';
 import { AudioEngine } from '../src/audio.js';
 await build();
+// Register voice-correction cases after the single shared build.
+await import('./voice-tone-cases.mjs');
 const { initDSP } = await import('../dist/dsp.js');
 await initDSP(await readFile(new URL('../dist/voice_dsp.wasm',import.meta.url)));
 const { Instrument, cycle } = await import('../dist/model.js');
