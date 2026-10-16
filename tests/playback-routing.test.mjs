@@ -66,3 +66,11 @@ test('a new mode choice cancels a preview still waiting for audio startup',async
   assert.equal(notes.length,0);
   assert.equal(c.playbackMode,'voice');
 });
+
+test('the piano waits for the new recorded model instead of playing a stale or unrelated synth',async()=>{
+  const {context:c,notes}=harness();c.audio.learnedGrains=null;
+  await c.startNote(60,'key');
+  assert.equal(notes.length,0);assert.equal(c.held.size,0);
+  c.audio.learnedGrains=[[]];c.playbackMode='synth';
+  await c.startNote(60,'key');assert.equal(notes.length,1);assert.equal(notes[0].mode,'synth');
+});

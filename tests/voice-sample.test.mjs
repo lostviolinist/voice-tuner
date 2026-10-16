@@ -28,41 +28,39 @@ test('nearest-note tuning and every piano note use the measured pitch, without r
   }
   assert.equal(samplePlaybackRate(voice,pitch),1);
 });
-test('voice mode uses a looping audio buffer; synth updates cannot replace it with a periodic wave',()=>{
+test('learned piano and preview use the same learned textures, separate from recorded reference',()=>{
   const engine=new AudioEngine(),sources=[];
-  const source=()=>{const s={playbackRate:{value:0},frequency:{value:0},connect(destination){return destination;},start(){this.started=true;},stop(){this.stopped=true;},disconnect(){this.disconnected=true;},setPeriodicWave(){this.waveUpdates=(this.waveUpdates||0)+1;}};sources.push(s);return s;};
+  const source=()=>{const s={frequency:{value:0},connect(destination){return destination;},start(){},stop(){this.stopped=true;},disconnect(){},setPeriodicWave(){this.waveUpdates=(this.waveUpdates||0)+1;}};sources.push(s);return s;};
   engine.context={sampleRate:rate,currentTime:0,
     createBuffer:(_,length,sampleRate)=>({sampleRate,copyToChannel(samples){this.data=samples.slice();}}),
-    createBufferSource:source,createOscillator:source,createPeriodicWave:()=>({}),
+    createOscillator:source,createPeriodicWave:()=>({}),
     createGain:()=>({gain:{setValueAtTime(){},linearRampToValueAtTime(){},cancelScheduledValues(){},setTargetAtTime(){}},connect(){},disconnect(){}})};
+  engine.createSustainVoice=(_context,grains,frequency)=>Object.assign(source(),{grains,frequency});
   engine.master={};
   const voice=engine.setVoiceRecording({samples:recording(),sampleRate:rate},pitch);
-  engine.note('a',voice.rootFrequency,new Float32Array(64),'voice');
-  engine.note('b',voice.rootFrequency*2,new Float32Array(64),'voice');
-  engine.note('c',220,new Float32Array(64),'synth');
-  assert.deepEqual(sources[0].buffer.data,voice.samples);
-  assert.equal(sources[0].loop,true);
-  assert.equal(sources[1].playbackRate.value,2*sources[0].playbackRate.value);
+  assert.throws(()=>engine.note('not-ready',220,[],'synth'),/not ready/);
+  const learned=engine.voiceGrains.map(grain=>grain.map(x=>-x));
+  engine.setLearnedGrains(learned);
+  engine.note('preview',voice.rootFrequency,[],'synth');
+  engine.note('key',voice.rootFrequency,[],'synth');
+  engine.note('reference',voice.rootFrequency,[],'voice');
+  assert.deepEqual(sources[0].grains,sources[1].grains);
+  assert.notDeepEqual(sources[0].grains,sources[2].grains);
+  assert.equal(sources[0].frequency,voice.rootFrequency);
   engine.update(new Float32Array(64));
   assert.equal(sources[0].waveUpdates,undefined);
-  assert.equal(sources[2].waveUpdates,2);
-  engine.stop('a'); assert.equal(sources[0].stopped,true);assert.equal(engine.voices.has('b'),true);
+  engine.stop('preview');assert.equal(sources[0].stopped,true);
   engine.stopAll();assert.equal(engine.voices.size,0);
-  const corrected = voice.samples.map(value => -value);
-  engine.setVoiceCorrections(new Map([[voice.rootMidi, {accepted:true, samples:corrected}], [voice.rootMidi + 1, {accepted:false}]]));
-  engine.note('corrected', voice.rootFrequency, [], 'voice');
-  assert.deepEqual(sources[3].buffer.data, corrected);
-  assert.equal(sources[3].playbackRate.value, voice.rootFrequency / pitch);
-  engine.note('outside', voice.rootFrequency * 4, [], 'voice');
-  assert.deepEqual(sources[4].buffer.data, voice.samples);
-  engine.note('rejected', voice.rootFrequency * 2 ** (1/12), [], 'voice');
-  assert.deepEqual(sources[5].buffer.data, voice.samples);
-  engine.voiceCorrectionEnabled = false;
-  engine.note('bypass', voice.rootFrequency, [], 'voice');
-  assert.deepEqual(sources[6].buffer.data, voice.samples);
-  engine.stopAll(); engine.setVoiceRecording({samples:recording(),sampleRate:rate},pitch);
-  assert.equal(engine.voiceCorrections.size, 0);
-  assert.equal(engine.voiceCorrectionEnabled, false);
+  const plain=engine.grainsFor(voice.rootFrequency,'voice');
+  const corrected=voice.samples.map(x=>-x);
+  engine.setVoiceCorrections(new Map([[voice.rootMidi,{accepted:true,samples:corrected}],[voice.rootMidi+1,{accepted:false}]]));
+  assert.notDeepEqual(engine.grainsFor(voice.rootFrequency,'voice'),plain);
+  engine.voiceCorrectionEnabled=false;
+  assert.deepEqual(engine.grainsFor(voice.rootFrequency,'voice'),plain);
+  engine.setVoiceRecording({samples:recording(),sampleRate:rate},pitch);
+  assert.equal(engine.voiceCorrections.size,0);assert.equal(engine.learnedGrains,null);assert.equal(engine.sustainCache.size,0);
+  engine.clearVoiceRecording();engine.note('sample',220,[1,0,0],'synth');engine.update([.5,.5,0]);
+  assert.equal(sources.at(-1).waveUpdates,2);
 });
 test('voice WAV export contains PCM samples rather than a harmonic recipe',()=>{
   const wav=encodeWav(new Float32Array([-1,0,1]),rate),view=new DataView(wav);

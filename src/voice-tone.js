@@ -1,3 +1,5 @@
+import { fft } from './fft.js';
+export { fft } from './fft.js';
 import { Circuit } from './vendor/numeric-ui-core.js';
 
 const FFT_SIZE = 4096, HOP = FFT_SIZE / 4, BANDS = 48, CONTROLS = 20;
@@ -6,32 +8,7 @@ const clamp = (x, low, high) => Math.max(low, Math.min(high, x));
 const frequencyFor = midi => 440 * 2 ** ((midi - 69) / 12);
 const window = Float64Array.from({length:FFT_SIZE}, (_, i) => .5 - .5 * Math.cos(2 * Math.PI * i / FFT_SIZE));
 
-// Radix-2 FFT. Analysis and rendering use the same frequency grid, but fit
-// acceptance is measured from rendered audio held out of the training data.
-export function fft(real, imaginary, inverse = false) {
-  const n = real.length;
-  for (let i = 1, j = 0; i < n; i++) {
-    let bit = n >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) { [real[i], real[j]] = [real[j], real[i]]; [imaginary[i], imaginary[j]] = [imaginary[j], imaginary[i]]; }
-  }
-  for (let size = 2; size <= n; size *= 2) {
-    const angle = (inverse ? 2 : -2) * Math.PI / size, wr = Math.cos(angle), wi = Math.sin(angle);
-    for (let start = 0; start < n; start += size) {
-      let ur = 1, ui = 0;
-      for (let j = 0; j < size / 2; j++) {
-        const a = start + j, b = a + size / 2;
-        const tr = real[b] * ur - imaginary[b] * ui, ti = real[b] * ui + imaginary[b] * ur;
-        real[b] = real[a] - tr; imaginary[b] = imaginary[a] - ti;
-        real[a] += tr; imaginary[a] += ti;
-        const next = ur * wr - ui * wi; ui = ur * wi + ui * wr; ur = next;
-      }
-    }
-  }
-  if (inverse) for (let i = 0; i < n; i++) { real[i] /= n; imaginary[i] /= n; }
-}
-
+// Filter acceptance is measured from rendered audio held out of training.
 export function spectrum(samples, sampleRate) {
   const power = new Float64Array(FFT_SIZE / 2 + 1);
   let frames = 0;

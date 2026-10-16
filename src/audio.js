@@ -1,6 +1,7 @@
-import { prepareVoiceSample, samplePlaybackRate } from './voice-sample.js';
+import { prepareVoiceSample } from './voice-sample.js';
+import { grainPlan, extractGrains, filterGrains, createSustainVoice } from './voice-grains.js';
 export class AudioEngine {
-  constructor() { this.voices = new Map(); this.level = .22; this.voiceCorrections = new Map(); this.voiceCorrectionEnabled = false; }
+  constructor() { this.voices = new Map(); this.level = .22; this.voiceCorrections = new Map(); this.voiceCorrectionEnabled = false; this.sustainCache = new Map(); this.createSustainVoice = createSustainVoice; }
   async ready() {
     if (!this.context) {
       this.context = new AudioContext();
@@ -8,7 +9,10 @@ export class AudioEngine {
       const limiter = this.context.createDynamicsCompressor(); limiter.threshold.value = -12; limiter.ratio.value = 12;
       this.master.connect(limiter).connect(this.context.destination);
     }
-    await this.context.resume(); return this.context;
+    await this.context.resume();
+    if (!this.sustainReady) this.sustainReady = this.context.audioWorklet.addModule('./sustain-processor.js').catch(error=>{this.sustainReady=null;throw error;});
+    await this.sustainReady;
+    return this.context;
   }
   wave(weights, frequency) {
     const real = new Float32Array(weights.length + 1), imaginary = new Float32Array(weights.length + 1);
@@ -16,13 +20,21 @@ export class AudioEngine {
     return this.context.createPeriodicWave(real, imaginary);
   }
   setVoiceRecording(recording, pitch) {
-    this.voiceSample = prepareVoiceSample(recording.samples, recording.sampleRate, pitch);
+    const sample = prepareVoiceSample(recording.samples, recording.sampleRate, pitch);
+    const plan = grainPlan(sample.samples, recording.sampleRate, pitch);
+    const grains = extractGrains(sample.samples, plan);
+    const buffer = this.context.createBuffer(1, sample.samples.length, recording.sampleRate);
+    buffer.copyToChannel(sample.samples, 0);
+    this.voiceSample = sample;
+    this.grainPlan = plan;
+    this.voiceGrains = grains;
+    this.voiceBuffer = buffer;
     this.clearVoiceCorrections();
-    this.voiceBuffer = this.context.createBuffer(1, this.voiceSample.samples.length, recording.sampleRate);
-    this.voiceBuffer.copyToChannel(this.voiceSample.samples, 0);
+    this.learnedGrains = null;
     return this.voiceSample;
   }
-  clearVoiceCorrections() { this.voiceCorrections.clear(); this.voiceCorrectionEnabled = false; }
+  setLearnedGrains(grains) { this.learnedGrains=grains; this.sustainCache.clear(); }
+  clearVoiceCorrections() { this.voiceCorrections.clear(); this.voiceCorrectionEnabled = false; this.sustainCache.clear(); }
   setVoiceCorrections(notes) {
     this.clearVoiceCorrections();
     for (const [midi, note] of notes) {
@@ -31,7 +43,7 @@ export class AudioEngine {
         buffer = this.context.createBuffer(1, note.samples.length, this.voiceSample.sampleRate);
         buffer.copyToChannel(note.samples, 0);
       }
-      this.voiceCorrections.set(midi, {buffer});
+      this.voiceCorrections.set(midi, {buffer, grains:buffer ? extractGrains(note.samples,this.grainPlan) : null, weights:note.weights, centers:note.centers});
     }
     this.voiceCorrectionEnabled = Array.from(this.voiceCorrections.values()).some(note => note.buffer);
   }
@@ -42,15 +54,25 @@ export class AudioEngine {
     if (Math.abs(1200 * Math.log2(frequency / (440 * 2 ** ((midi - 69) / 12)))) > .1) return null;
     return this.voiceCorrections.get(midi) || null;
   }
-  clearVoiceRecording() { this.voiceSample = null; this.voiceBuffer = null; this.clearVoiceCorrections(); }
+  clearVoiceRecording() { this.voiceSample = null; this.voiceBuffer = null; this.voiceGrains=null; this.learnedGrains=null; this.clearVoiceCorrections(); }
+  grainsFor(frequency, mode) {
+    const key=`${frequency}:${mode}:${this.voiceCorrectionEnabled}`;
+    if (!this.sustainCache.has(key)) {
+      const correction=this.voiceCorrectionFor(frequency);
+      const bank=mode==='voice' ? correction?.grains || this.voiceGrains : this.learnedGrains;
+      if(!bank)throw new Error('Your learned voice is not ready yet. Wait for learning to finish.');
+      this.sustainCache.set(key,filterGrains(bank,frequency,this.context.sampleRate,mode==='synth' && correction?.buffer && correction.centers ? correction : null));
+    }
+    return this.sustainCache.get(key);
+  }
   note(id, frequency, weights, mode = 'synth') {
     if (this.voices.has(id)) return;
     const gain = this.context.createGain();
     let oscillator, level = .28;
-    if (mode === 'voice') {
-      if (!this.voiceBuffer) throw new Error('Record your voice before choosing Voice mode.');
-      oscillator = this.context.createBufferSource(); oscillator.buffer = this.voiceCorrectionFor(frequency)?.buffer || this.voiceBuffer; oscillator.loop = true;
-      oscillator.playbackRate.value = samplePlaybackRate(this.voiceSample, frequency);
+    const sustained = mode === 'voice' || (mode === 'synth' && this.voiceSample);
+    if (sustained) {
+      if (!this.voiceBuffer) throw new Error('Record your voice before playing this instrument.');
+      oscillator = this.createSustainVoice(this.context,this.grainsFor(frequency,mode),frequency);
       level *= this.voiceSample.gain;
     } else {
       oscillator = this.context.createOscillator();
@@ -58,9 +80,9 @@ export class AudioEngine {
     }
     gain.gain.setValueAtTime(0, this.context.currentTime); gain.gain.linearRampToValueAtTime(level, this.context.currentTime + .015);
     oscillator.connect(gain).connect(this.master); oscillator.start();
-    this.voices.set(id, { oscillator, gain, frequency, mode });
+    this.voices.set(id, { oscillator, gain, frequency, mode, sustained });
   }
-  update(weights) { for (const voice of this.voices.values()) if (voice.mode === 'synth') voice.oscillator.setPeriodicWave(this.wave(weights, voice.frequency)); }
+  update(weights) { for (const voice of this.voices.values()) if (voice.mode === 'synth' && !voice.sustained) voice.oscillator.setPeriodicWave(this.wave(weights, voice.frequency)); }
   stop(id) {
     const voice = this.voices.get(id); if (!voice) return;
     voice.gain.gain.cancelScheduledValues(this.context.currentTime);
