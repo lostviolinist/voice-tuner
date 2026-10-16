@@ -18,6 +18,10 @@ const noteName = frequency => {
   return ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'][((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1);
 };
 function status(message) { $('status').textContent = message; }
+function captureStatus(message, error = false) {
+  $('capture-status').textContent = message;
+  $('capture-status').classList.toggle('error', error);
+}
 function stopAudition() {
   clearTimeout(auditionTimer); audio.stop('audition'); audio.stopRecording(); audition = null;
   for (const [kind,label] of [['target','Listen to target'],['synth','Listen to synth'],['original','Original recording']]) {
@@ -81,18 +85,20 @@ function frame(time) {
   }
   requestAnimationFrame(frame);
 }
-$('train').addEventListener('click', () => {
+function startLearning() {
   if (locks.size === HARMONICS) { status('All harmonics are locked. Unlock at least one to teach the synth.'); return; }
-  if (!training) model.steps = 0;
-  setTraining(!training);
-  if (training) {
-    listen('synth', { toggle:false, durationMs:8000 });
-    status('Listen as the synth learns your target. The piano plays this evolving sound.');
-  } else { stopAudition(); status('Learning paused. Play the current sound, or keep teaching.'); }
+  model.steps = 0; setTraining(true);
+  listen('synth', { toggle:false, durationMs:8000 });
+  status('Listen as the synth learns your target. The piano plays this evolving sound.');
+}
+$('train').addEventListener('click', () => {
+  if (training) { setTraining(false); stopAudition(); status('Learning paused. Play the current sound, or keep teaching.'); }
+  else startLearning();
 });
 $('reset').addEventListener('click', () => { setTraining(false); model.reset(); sync(); status('Back to a simple tone. Your target and locks are kept.'); });
 document.querySelectorAll('[data-vowel]').forEach(button => button.addEventListener('click', () => {
   if (busy) return; recorded = null; $('listen-original').hidden = true;
+  captureStatus('Record a steady vowel. Learning and playback start automatically.');
   document.querySelectorAll('[data-vowel]').forEach(other => { other.classList.toggle('selected', other===button); other.setAttribute('aria-pressed', String(other===button)); });
   setTarget(vowel(button.dataset.vowel), 196, `SYNTHETIC / ${button.dataset.vowel.toUpperCase()}${button.dataset.vowel[0].toUpperCase()}`);
   listen('target', { toggle:false });
@@ -102,20 +108,37 @@ $('record').addEventListener('click', async () => {
   if (busy) return;
   busy = true; silence(); setTraining(false);
   const controls = document.querySelectorAll('#record, #train, #reset, [data-vowel], .listen-row button, #save');
+  let captured = false;
   controls.forEach(button => button.disabled = true);
   $('record-text').textContent = 'Waiting for microphone…'; status('Allow microphone access, then hold one comfortable note.');
+  captureStatus('Allow microphone access, then hold a steady “ooo” for 2 seconds.');
+  $('capture-meter').hidden = true;
   try {
-    const recording = await audio.record(() => { $('record').classList.add('recording'); $('record-text').textContent = 'Listening… hold your note'; status('Listening for 2 seconds. Hold a steady vowel.'); });
+    const recording = await audio.record(() => {
+      $('record').classList.add('recording'); $('record-text').textContent = 'Listening… hold your note';
+      $('capture-meter').hidden = false; $('capture-meter').value = 0;
+      captureStatus('Listening… hold your vowel.'); status('Listening for 2 seconds. Hold a steady vowel.');
+    }, ({ elapsed, level }) => {
+      $('capture-meter').value = Math.min(1, level * 8);
+      $('record-text').textContent = `Recording · ${Math.max(0, 2 - elapsed).toFixed(1)}s left`;
+      captureStatus(level < .008 ? 'Very quiet — move closer and hold your note.' : 'Hearing you — keep holding that vowel.');
+    });
     $('record-text').textContent = 'Finding your sound…';
+    captureStatus('Recording captured. Finding your pitch and harmonics…');
+    // Let the browser paint the analysis state before synchronous WASM work.
+    await new Promise(resolve => setTimeout(resolve, 0));
     const result = analyze(recording.samples, recording.sampleRate);
     recorded = recording;
     setTarget(result.amplitudes, result.pitch, 'YOUR VOICE / CAPTURED');
     document.querySelectorAll('[data-vowel]').forEach(button => { button.classList.remove('selected'); button.setAttribute('aria-pressed','false'); });
     $('listen-original').hidden = false;
-    status('Got your note. Teach the synth to approximate its harmonic character.');
+    captured = true;
+    captureStatus(`Captured ${noteName(pitch)} · ${Math.round(pitch)} Hz. ${locks.size === HARMONICS ? 'Unlock a harmonic to start learning.' : 'Your synth is learning aloud. Try the piano next.'}`);
   } catch (error) {
-    status(error.name === 'NotAllowedError' ? 'Microphone access wasn’t granted. Try a sample, or allow access in your browser and record again.' : error.name === 'NotFoundError' ? 'No microphone was found. Connect one, or try a sample sound.' : error.message);
-  } finally { busy = false; controls.forEach(button => button.disabled = false); $('record-text').textContent = 'Record your voice'; $('record').classList.remove('recording'); }
+    const message = error.name === 'NotAllowedError' ? 'Microphone access wasn’t granted. Allow access in your browser and record again, or try a sample.' : error.name === 'NotFoundError' ? 'No microphone was found. Connect one, or try a sample sound.' : error.name === 'NotReadableError' ? 'The microphone could not start. Check your microphone input or close other apps using it, then try again.' : error.message;
+    captureStatus(message, true); status(message);
+  } finally { busy = false; controls.forEach(button => button.disabled = false); $('record-text').textContent = captured ? 'Record again' : 'Record your voice'; $('record').classList.remove('recording'); $('capture-meter').hidden = true; }
+  if (captured) startLearning();
 });
 async function listen(kind, { toggle = true, durationMs = 3000 } = {}) {
   if (busy) return;

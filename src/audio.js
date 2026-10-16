@@ -33,22 +33,27 @@ export class AudioEngine {
   }
   stopAll() { for (const id of this.voices.keys()) this.stop(id); }
   volume(value) { this.level = value; if (this.master) this.master.gain.setTargetAtTime(value, this.context.currentTime, .02); }
-  async record(onStart) {
+  async record(onStart, onProgress = () => {}) {
     const context = await this.ready();
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access needs HTTPS or localhost. You can still use the sample sounds.');
     let stream, source, capture, silence, timer;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      // Permission prompts can suspend audio after the initial user gesture.
+      await context.resume();
       if (!this.workletLoaded) { await context.audioWorklet.addModule('./recorder.js'); this.workletLoaded = true; }
       source = context.createMediaStreamSource(stream);
       capture = new AudioWorkletNode(context, 'capture');
       silence = context.createGain(); silence.gain.value = 0;
-      source.connect(capture).connect(silence).connect(context.destination);
-      onStart();
       const samples = await new Promise((resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('Recording timed out. Please try again.')), 6000);
-        capture.port.onmessage = event => resolve(event.data);
+        timer = setTimeout(() => reject(new Error('No audio arrived from the microphone. Check your browser’s microphone input and try again.')), 6000);
+        capture.port.onmessage = ({ data }) => {
+          if (data.type === 'progress') onProgress(data);
+          else if (data.type === 'complete') resolve(data.samples);
+        };
         capture.onprocessorerror = () => reject(new Error('Audio capture failed. Please try again.'));
+        onStart();
+        source.connect(capture).connect(silence).connect(context.destination);
       });
       return { samples, sampleRate: context.sampleRate };
     } finally {
