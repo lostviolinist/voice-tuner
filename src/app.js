@@ -245,9 +245,12 @@ $('record').addEventListener('click', async () => {
     if (locks.size < HARMONICS) startLearning('voice'); else listen('voice', {toggle:false});
   }
 });
-async function listen(kind, { toggle = true, durationMs = 3000, frequency } = {}) {
+async function listen(kind, { toggle = true, durationMs = 3000, frequency, selectForPiano = false } = {}) {
   if (busy) return;
   const was = audition; silence(); if (toggle && was === kind) return;
+  // Previewing a playable instrument also selects it for the piano.
+  // Original recording and target tone are comparisons, not piano modes.
+  if (selectForPiano && (kind === 'synth' || kind === 'voice')) setPlaybackMode(kind);
   const ticket = epoch;
   try {
     await audio.ready(); if (epoch !== ticket) return;
@@ -255,14 +258,14 @@ async function listen(kind, { toggle = true, durationMs = 3000, frequency } = {}
     $(`listen-${kind}`).textContent = `■ Playing ${kind === 'original' ? 'recording' : kind === 'synth' ? 'learned synth' : kind === 'voice' ? 'voice instrument' : 'target tone'} · stop`;
     if (kind === 'original' && recorded) await audio.playRecording(recorded.samples, recorded.sampleRate);
     else {
-      const hz = kind === 'voice' ? frequency || audio.voiceSample.rootFrequency : pitch;
+      const hz = recorded && kind !== 'target' ? frequency || audio.voiceSample.rootFrequency : pitch;
       audio.note('audition', hz, kind === 'target' ? target : model.weights, kind === 'voice' ? 'voice' : 'synth');
       if (kind === 'voice') showVoiceNote(hz);
     }
     auditionTimer = setTimeout(stopAudition, kind === 'original' ? 2100 : durationMs);
   } catch (error) { status(`Audio couldn’t start: ${error.message}`); stopAudition(); }
 }
-for (const kind of ['target','synth','original','voice']) $(`listen-${kind}`).addEventListener('click', () => listen(kind));
+for (const kind of ['target','synth','original','voice']) $(`listen-${kind}`).addEventListener('click', () => listen(kind, {selectForPiano:true}));
 const frequencyFor = midi => 440 * 2 ** ((midi - 69) / 12);
 let keyboardMode = 'wide', layout = keyboardLayout();
 function refreshKey(midi) {
