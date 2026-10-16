@@ -22,9 +22,13 @@ After a successful recording, learning and playback start automatically. The syn
 
 Use **Hear target** and **Hear instrument** to compare them. **Original recording** lets you hear the voice you recorded.
 
-### 3. Play a little melody
+### 3. Play a melody—or a whole piece
 
-Click or tap the piano keys, or play them with your computer keyboard:
+Your instrument has a full **88-key piano, from A0 to C8**. Scroll sideways to reach the low bass notes and the highest notes, and hold several keys together to play chords.
+
+Use **[** and **]** (or the − / + buttons) to move your computer keyboard down or up an octave. The highlighted keys show which notes you’re playing; the starting range is C4–C5. You can change octaves while holding a note.
+
+Click or tap any piano key, or use these computer keys:
 
 ```text
 Black keys:   W E   T Y U

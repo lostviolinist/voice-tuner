@@ -13,6 +13,7 @@ const model = new Instrument(), audio = new AudioEngine(), locks = new Set();
 let target = vowel('oo'), pitch = 196, training = false, busy = false, recorded = null, audition = null, auditionTimer, epoch = 0;
 let baseline = 1, currentLoss = 1;
 const sliders = [], markers = [];
+const held = new Map(), keyElements = new Map();
 const noteName = frequency => {
   const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
   return ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'][((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1);
@@ -28,7 +29,7 @@ function stopAudition() {
     $(`listen-${kind}`).classList.remove('active'); $(`listen-${kind}`).textContent = `▷ ${label}`;
   }
 }
-function silence() { epoch++; stopAudition(); audio.stopAll(); document.querySelectorAll('.key.active').forEach(key => key.classList.remove('active')); }
+function silence() { epoch++; held.clear(); stopAudition(); audio.stopAll(); document.querySelectorAll('.key.active').forEach(key => key.classList.remove('active')); }
 function setTraining(value) {
   training = value;
   $('learning-state').textContent = value ? 'Learning…' : 'Ready to train';
@@ -161,37 +162,70 @@ async function listen(kind, { toggle = true, durationMs = 3000 } = {}) {
   } catch (error) { status(`Audio couldn’t start: ${error.message}`); stopAudition(); }
 }
 for (const kind of ['target','synth','original']) $(`listen-${kind}`).addEventListener('click', () => listen(kind));
-const notes = [{s:0,k:'a'},{s:1,k:'w',black:true,left:9},{s:2,k:'s'},{s:3,k:'e',black:true,left:21.5},{s:4,k:'d'},{s:5,k:'f'},{s:6,k:'t',black:true,left:46.5},{s:7,k:'g'},{s:8,k:'y',black:true,left:59},{s:9,k:'h'},{s:10,k:'u',black:true,left:71.5},{s:11,k:'j'},{s:12,k:'k'}];
-const held = new Set(), keyElements = new Map();
-async function startNote(note, id) {
-  if (busy || held.has(id)) return; held.add(id);
-  const ticket = epoch;
+const typingKeys = ['a','w','s','e','d','f','t','g','y','h','u','j','k'];
+const frequencyFor = midi => 440 * 2 ** ((midi - 69) / 12);
+let keyboardOctave = 4;
+function refreshKey(midi) {
+  keyElements.get(midi).classList.toggle('active', Array.from(held.values()).some(note => note.midi === midi));
+}
+async function startNote(midi, id) {
+  if (busy || held.has(id)) return;
+  const note = { midi }, ticket = epoch;
+  held.set(id, note);
   try {
-    await audio.ready(); if (!held.has(id) || ticket !== epoch) return;
-    stopAudition(); audio.note(id, 261.625565 * 2 ** (note.s/12), model.weights); keyElements.get(note.k).classList.add('active');
-  } catch (error) { held.delete(id); status(`Audio couldn’t start: ${error.message}`); }
+    await audio.ready(); if (held.get(id) !== note || ticket !== epoch) return;
+    stopAudition(); audio.note(id, frequencyFor(midi), model.weights); refreshKey(midi);
+  } catch (error) { if (held.get(id) === note) held.delete(id); refreshKey(midi); status(`Audio couldn’t start: ${error.message}`); }
 }
-function stopNote(note, id) { held.delete(id); audio.stop(id); keyElements.get(note.k).classList.remove('active'); }
-for (const note of notes) {
-  const button = document.createElement('button'); button.className = `key ${note.black ? 'black':'white'}`;
-  if (note.black) button.style.left = `${note.left}%`;
-  const name = noteName(261.625565 * 2 ** (note.s/12));
-  button.setAttribute('aria-label', `Play ${name}, keyboard ${note.k.toUpperCase()}`);
-  button.innerHTML = `<span class="note-name">${name}</span><span>${note.k.toUpperCase()}</span>`;
-  button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); startNote(note, `pointer-${event.pointerId}`); });
-  for (const type of ['pointerup','pointercancel','lostpointercapture']) button.addEventListener(type, event => stopNote(note, `pointer-${event.pointerId}`));
-  button.addEventListener('keydown', event => { if (['Enter',' '].includes(event.key)) { event.preventDefault(); startNote(note, `accessible-${note.k}`); } });
-  button.addEventListener('keyup', event => { if (['Enter',' '].includes(event.key)) stopNote(note, `accessible-${note.k}`); });
-  button.addEventListener('blur', () => stopNote(note, `accessible-${note.k}`));
-  keyElements.set(note.k,button); $('keyboard').append(button);
+function stopNote(id) {
+  const note = held.get(id); if (!note) return;
+  held.delete(id); audio.stop(id); refreshKey(note.midi);
 }
+let whiteCount = 0;
+for (let midi = 21; midi <= 108; midi++) {
+  const black = [1,3,6,8,10].includes(midi % 12);
+  const button = document.createElement('button'); button.className = `key ${black ? 'black':'white'}`;
+  // Black keys sit on the boundary between their two white neighbours.
+  button.style.left = `calc(var(--piano-key-width) * ${black ? whiteCount - .31 : whiteCount})`;
+  if (!black) whiteCount++;
+  const name = noteName(frequencyFor(midi));
+  button.dataset.note = name;
+  button.innerHTML = `<span class="note-name">${name}</span><span class="typing-key"></span>`;
+  button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); startNote(midi, `pointer-${event.pointerId}`); });
+  for (const type of ['pointerup','pointercancel','lostpointercapture']) button.addEventListener(type, event => stopNote(`pointer-${event.pointerId}`));
+  button.addEventListener('keydown', event => { if (['Enter',' '].includes(event.key)) { event.preventDefault(); if (!event.repeat) startNote(midi, `accessible-${midi}`); } });
+  button.addEventListener('keyup', event => { if (['Enter',' '].includes(event.key)) { event.preventDefault(); stopNote(`accessible-${midi}`); } });
+  button.addEventListener('blur', () => stopNote(`accessible-${midi}`));
+  keyElements.set(midi,button); $('keyboard').append(button);
+}
+function setKeyboardOctave(octave) {
+  keyboardOctave = Math.max(1, Math.min(7, octave));
+  const base = (keyboardOctave + 1) * 12;
+  for (const [midi, button] of keyElements) {
+    const shortcut = typingKeys[midi - base];
+    button.querySelector('.typing-key').textContent = shortcut?.toUpperCase() || '';
+    button.classList.toggle('mapped', Boolean(shortcut));
+    button.setAttribute('aria-label', `Play ${button.dataset.note}${shortcut ? `, keyboard ${shortcut.toUpperCase()}` : ''}`);
+  }
+  $('keyboard-range').textContent = `C${keyboardOctave} – C${keyboardOctave + 1}`;
+  $('octave-down').disabled = keyboardOctave === 1;
+  $('octave-up').disabled = keyboardOctave === 7;
+  const viewport = $('keyboard-scroll'), first = keyElements.get(base), last = keyElements.get(base + 12);
+  viewport.scrollLeft = (first.offsetLeft + last.offsetLeft + last.offsetWidth - viewport.clientWidth) / 2;
+}
+$('octave-down').addEventListener('click', () => setKeyboardOctave(keyboardOctave - 1));
+$('octave-up').addEventListener('click', () => setKeyboardOctave(keyboardOctave + 1));
+setKeyboardOctave(keyboardOctave);
 window.addEventListener('keydown', event => {
-  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || ['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName)) return;
-  const note = notes.find(note => note.k === event.key.toLowerCase()); if (note) { event.preventDefault(); startNote(note, `keyboard-${note.k}`); }
+  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.target.isContentEditable || ['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName)) return;
+  if (event.key === '[' || event.key === ']') { event.preventDefault(); setKeyboardOctave(keyboardOctave + (event.key === '[' ? -1 : 1)); return; }
+  const key = event.key.toLowerCase(), semitone = typingKeys.indexOf(key);
+  if (semitone !== -1) { event.preventDefault(); startNote((keyboardOctave + 1) * 12 + semitone, `keyboard-${key}`); }
 });
-window.addEventListener('keyup', event => { const note = notes.find(note => note.k === event.key.toLowerCase()); if (note) stopNote(note, `keyboard-${note.k}`); });
-window.addEventListener('blur', () => { held.clear(); silence(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) { held.clear(); silence(); setTraining(false); } });
+// Release the original pitch even if the octave changed while the key was held.
+window.addEventListener('keyup', event => stopNote(`keyboard-${event.key.toLowerCase()}`));
+window.addEventListener('blur', silence);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { silence(); setTraining(false); } });
 $('volume').addEventListener('input', event => audio.volume(Number(event.target.value)));
 $('save').addEventListener('click', () => {
   const data = { format:'voice-tuner/v1', harmonics:Array.from(model.weights), sourcePitchHz:pitch, source:$('source-name').textContent, lockedHarmonics:Array.from(locks, h => h+1) };
