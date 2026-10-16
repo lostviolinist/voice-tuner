@@ -4,6 +4,8 @@ Make a whole new instrument with your voice! Sing a note, teach a synth your ton
 
 Inspired by [Handwired by Cheng Lou](https://github.com/chenglou/handwired).
 
+[**Play Meloform →**](https://meloform-music.pages.dev/)
+
 ## Let’s make some music
 
 ### 1. Give it a little “ooo”
