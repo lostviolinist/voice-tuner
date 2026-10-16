@@ -1,0 +1,20 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo test --manifest-path crates/voice-dsp/Cargo.toml
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-tuner-site
+          path: dist
