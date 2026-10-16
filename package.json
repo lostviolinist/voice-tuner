@@ -1,9 +1,11 @@
 {
-  "name": "voice-tuner",
+  "name": "meloform",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "node scripts/server.mjs",
     "start": "node scripts/server.mjs",
