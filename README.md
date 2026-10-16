@@ -26,21 +26,18 @@ Use **Hear target** and **Hear instrument** to compare them. **Original recordin
 
 Your instrument has a full **88-key piano, from A0 to C8**. Scroll sideways to reach the low bass notes and the highest notes, and hold several keys together to play chords.
 
-Use **[** and **]** (or the − / + buttons) to move your computer keyboard down or up an octave. The highlighted keys show which notes you’re playing; the starting range is C4–C5. You can change octaves while holding a note.
+The default **Wide** computer-keyboard layout gives you **C3–C8 all at once**. Play the number row, then Q–P, A–L, and Z–M to move from low to high white notes. Hold **Shift** for the black note just above one of those notes. The **Computer key guide** shows every mapping, including flats.
 
-Click or tap any piano key, or use these computer keys:
-
-```text
-Black keys:   W E   T Y U
-White keys:  A S D F G H J K
-```
-
-Try the opening of “Twinkle, Twinkle”:
+Want to try Chopin’s Nocturne Op. 9 No. 2 in E-flat major? With Wide set to C3–C8, the opening melody is:
 
 ```text
-A A G G H H G
-F F D D S S A
+⇧E  O  O  I  O  I  ⇧Y  ⇧E  O
+B♭4 G5 G5 F5 G5 F5 E♭5 B♭4 G5
 ```
+
+**⇧ means hold Shift with that key.** Play the rhythm yourself; these are note shortcuts, not automatic playback. You can play notes outside the visible part of the piano without scrolling. [See the score](https://s9.imslp.org/files/imglnks/usimg/1/14/IMSLP61906-PMLP02312-Chopin-Op09n2rje.pdf).
+
+Prefer the smaller layout? Select **Classic** for A S D F G H J K on the white keys and W E T Y U on the black keys. **[ / ]** or the − / + buttons move either layout down or up an octave. The displayed range tells you where you are.
 
 Same melody. Your own little voice-instrument. ♡
 

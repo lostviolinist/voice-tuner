@@ -2,6 +2,7 @@ import { Instrument, cycle, HARMONICS } from './model.js';
 import { analyze, vowel } from './analysis.js';
 import { AudioEngine } from './audio.js';
 import { initDSP } from './dsp.js';
+import { keyboardLayout, typedNote, pianoNoteName } from './keyboard-layout.js';
 try { await initDSP(); }
 catch (error) {
   document.getElementById('status').textContent = error.message;
@@ -13,7 +14,7 @@ const model = new Instrument(), audio = new AudioEngine(), locks = new Set();
 let target = vowel('oo'), pitch = 196, training = false, busy = false, recorded = null, audition = null, auditionTimer, epoch = 0;
 let baseline = 1, currentLoss = 1;
 const sliders = [], markers = [];
-const held = new Map(), keyElements = new Map();
+const held = new Map(), keyElements = new Map(), guideElements = new Map();
 const noteName = frequency => {
   const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
   return ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'][((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1);
@@ -29,7 +30,7 @@ function stopAudition() {
     $(`listen-${kind}`).classList.remove('active'); $(`listen-${kind}`).textContent = `▷ ${label}`;
   }
 }
-function silence() { epoch++; held.clear(); stopAudition(); audio.stopAll(); document.querySelectorAll('.key.active').forEach(key => key.classList.remove('active')); }
+function silence() { epoch++; held.clear(); stopAudition(); audio.stopAll(); document.querySelectorAll('.key.active, .typing-guide-key.active').forEach(key => key.classList.remove('active')); }
 function setTraining(value) {
   training = value;
   $('learning-state').textContent = value ? 'Learning…' : 'Ready to train';
@@ -162,11 +163,12 @@ async function listen(kind, { toggle = true, durationMs = 3000 } = {}) {
   } catch (error) { status(`Audio couldn’t start: ${error.message}`); stopAudition(); }
 }
 for (const kind of ['target','synth','original']) $(`listen-${kind}`).addEventListener('click', () => listen(kind));
-const typingKeys = ['a','w','s','e','d','f','t','g','y','h','u','j','k'];
 const frequencyFor = midi => 440 * 2 ** ((midi - 69) / 12);
-let keyboardOctave = 4;
+let keyboardMode = 'wide', layout = keyboardLayout();
 function refreshKey(midi) {
   keyElements.get(midi).classList.toggle('active', Array.from(held.values()).some(note => note.midi === midi));
+  const guide = guideElements.get(midi);
+  if (guide) guide.cell.classList.toggle('active', Array.from(held.values()).some(note => note.midi === guide.binding.midi || note.midi === guide.binding.sharp));
 }
 async function startNote(midi, id) {
   if (busy || held.has(id)) return;
@@ -188,7 +190,7 @@ for (let midi = 21; midi <= 108; midi++) {
   // Black keys sit on the boundary between their two white neighbours.
   button.style.left = `calc(var(--piano-key-width) * ${black ? whiteCount - .31 : whiteCount})`;
   if (!black) whiteCount++;
-  const name = noteName(frequencyFor(midi));
+  const name = pianoNoteName(midi);
   button.dataset.note = name;
   button.innerHTML = `<span class="note-name">${name}</span><span class="typing-key"></span>`;
   button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); startNote(midi, `pointer-${event.pointerId}`); });
@@ -199,31 +201,56 @@ for (let midi = 21; midi <= 108; midi++) {
   keyElements.set(midi,button); $('keyboard').append(button);
 }
 function setKeyboardOctave(octave) {
-  keyboardOctave = Math.max(1, Math.min(7, octave));
-  const base = (keyboardOctave + 1) * 12;
-  for (const [midi, button] of keyElements) {
-    const shortcut = typingKeys[midi - base];
-    button.querySelector('.typing-key').textContent = shortcut?.toUpperCase() || '';
-    button.classList.toggle('mapped', Boolean(shortcut));
-    button.setAttribute('aria-label', `Play ${button.dataset.note}${shortcut ? `, keyboard ${shortcut.toUpperCase()}` : ''}`);
+  layout = keyboardLayout(keyboardMode, octave);
+  const shortcuts = new Map();
+  for (const binding of layout.bindings) {
+    shortcuts.set(binding.midi, binding.key.toUpperCase());
+    if (binding.sharp !== null) shortcuts.set(binding.sharp, `⇧${binding.key.toUpperCase()}`);
   }
-  $('keyboard-range').textContent = `C${keyboardOctave} – C${keyboardOctave + 1}`;
-  $('octave-down').disabled = keyboardOctave === 1;
-  $('octave-up').disabled = keyboardOctave === 7;
-  const viewport = $('keyboard-scroll'), first = keyElements.get(base), last = keyElements.get(base + 12);
-  viewport.scrollLeft = (first.offsetLeft + last.offsetLeft + last.offsetWidth - viewport.clientWidth) / 2;
+  for (const [midi, button] of keyElements) {
+    const shortcut = shortcuts.get(midi);
+    button.querySelector('.typing-key').textContent = shortcut || '';
+    button.classList.toggle('mapped', Boolean(shortcut));
+    button.setAttribute('aria-label', `Play ${button.dataset.note}${shortcut ? `, keyboard ${shortcut.replace('⇧','Shift+')}` : ''}`);
+  }
+  $('keyboard-range').textContent = `${pianoNoteName(layout.base)} – ${pianoNoteName(layout.end)}`;
+  $('octave-down').disabled = layout.octave === 1;
+  $('octave-up').disabled = layout.octave === layout.maxOctave;
+  $('typing-help').textContent = keyboardMode === 'wide'
+    ? 'Numbers → top letters → middle letters → bottom letters, from low to high. Hold Shift (⇧) for the black note above a white key. Mapped notes play even when they’re offscreen.'
+    : 'A S D F G H J K play the white notes; W E T Y U play the black notes. Use [ / ] to change octave.';
+  $('typing-guide').replaceChildren(); guideElements.clear();
+  for (const binding of layout.bindings) {
+    const cell = document.createElement('div'); cell.className = 'typing-guide-key';
+    cell.innerHTML = `<kbd>${binding.key.toUpperCase()}</kbd><span>${pianoNoteName(binding.midi)}</span>${binding.sharp !== null ? `<small>⇧ ${pianoNoteName(binding.sharp)}</small>` : '<small>—</small>'}`;
+    $('typing-guide').append(cell);
+    guideElements.set(binding.midi, { cell, binding });
+    if (binding.sharp !== null) guideElements.set(binding.sharp, { cell, binding });
+    refreshKey(binding.midi);
+  }
+  $('chopin-guide').hidden = keyboardMode !== 'wide' || layout.octave !== 3;
+  $('twinkle-guide').hidden = keyboardMode !== 'classic';
+  const viewport = $('keyboard-scroll');
+  // Start near the melody register; every mapped note remains reachable by typing.
+  const center = keyElements.get(keyboardMode === 'wide' ? layout.base + 24 : layout.base + 7);
+  viewport.scrollLeft = center.offsetLeft - viewport.clientWidth / 2 + center.offsetWidth / 2;
 }
-$('octave-down').addEventListener('click', () => setKeyboardOctave(keyboardOctave - 1));
-$('octave-up').addEventListener('click', () => setKeyboardOctave(keyboardOctave + 1));
-setKeyboardOctave(keyboardOctave);
+$('keyboard-layout').addEventListener('change', event => {
+  keyboardMode = event.target.value;
+  setKeyboardOctave(keyboardMode === 'wide' ? 3 : 4);
+  $('keyboard-scroll').focus({ preventScroll:true });
+});
+$('octave-down').addEventListener('click', () => setKeyboardOctave(layout.octave - 1));
+$('octave-up').addEventListener('click', () => setKeyboardOctave(layout.octave + 1));
+setKeyboardOctave(layout.octave);
 window.addEventListener('keydown', event => {
   if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.target.isContentEditable || ['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName)) return;
-  if (event.key === '[' || event.key === ']') { event.preventDefault(); setKeyboardOctave(keyboardOctave + (event.key === '[' ? -1 : 1)); return; }
-  const key = event.key.toLowerCase(), semitone = typingKeys.indexOf(key);
-  if (semitone !== -1) { event.preventDefault(); startNote((keyboardOctave + 1) * 12 + semitone, `keyboard-${key}`); }
+  if (event.code === 'BracketLeft' || event.code === 'BracketRight') { event.preventDefault(); setKeyboardOctave(layout.octave + (event.code === 'BracketLeft' ? -1 : 1)); return; }
+  const midi = typedNote(layout, event.code, event.shiftKey);
+  if (midi !== null) { event.preventDefault(); startNote(midi, `keyboard-${event.code}`); }
 });
-// Release the original pitch even if the octave changed while the key was held.
-window.addEventListener('keyup', event => stopNote(`keyboard-${event.key.toLowerCase()}`));
+// Physical key identity keeps releases correct after Shift or octave changes.
+window.addEventListener('keyup', event => stopNote(`keyboard-${event.code}`));
 window.addEventListener('blur', silence);
 document.addEventListener('visibilitychange', () => { if (document.hidden) { silence(); setTraining(false); } });
 $('volume').addEventListener('input', event => audio.volume(Number(event.target.value)));
