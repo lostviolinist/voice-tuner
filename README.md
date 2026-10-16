@@ -15,9 +15,9 @@ Open http://127.0.0.1:5173. The dev command builds once; after source edits, res
 
 ## Try it
 
-1. Pick a synthetic **ooo / aaa / eee** sample, or record a steady vowel for two seconds.
+1. Click a synthetic **ooo / aaa / eee** sample to hear it immediately, or record a steady vowel for two seconds. Selecting a new target preserves your current synth sound; only Reset returns it to the starting tone.
 2. Compare **Listen to target** and **Listen to synth**. For recordings, **Original recording** plays the captured audio separately.
-3. Press **Teach the synth**. The 16 harmonic sliders converge on the target; listen while they learn.
+3. Press **Teach the synth**. It automatically plays as the 16 harmonic sliders converge on the target. The target and synth listen buttons show which sound is playing.
 4. Click a harmonic number to lock it. Drag sliders to change the timbre, then train the remaining controls.
 5. Play the keys with touch, a mouse, or `A W S E D F T G Y H U J K`. Focused piano keys also support Enter/Space.
 6. **Save instrument** exports the harmonic recipe as JSON (no audio). Import is not implemented yet.

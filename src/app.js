@@ -20,7 +20,9 @@ const noteName = frequency => {
 function status(message) { $('status').textContent = message; }
 function stopAudition() {
   clearTimeout(auditionTimer); audio.stop('audition'); audio.stopRecording(); audition = null;
-  for (const id of ['listen-target', 'listen-synth', 'listen-original']) $(id).classList.remove('active');
+  for (const [kind,label] of [['target','Listen to target'],['synth','Listen to synth'],['original','Original recording']]) {
+    $(`listen-${kind}`).classList.remove('active'); $(`listen-${kind}`).textContent = `▷ ${label}`;
+  }
 }
 function silence() { epoch++; stopAudition(); audio.stopAll(); document.querySelectorAll('.key.active').forEach(key => key.classList.remove('active')); }
 function setTraining(value) {
@@ -29,7 +31,7 @@ function setTraining(value) {
 }
 function setTarget(amplitudes, frequency, name) {
   silence(); setTraining(false); target = amplitudes; pitch = frequency;
-  model.reset(); model.setTarget(target); currentLoss = model.evaluate().loss;
+  model.setTarget(target); currentLoss = model.evaluate().loss;
   baseline = Math.max(cycle(target).reduce((sum, n) => sum + n*n, 0) / 128, 1e-8);
   $('source-name').textContent = name; $('pitch').textContent = `${Math.round(pitch)} Hz · ${noteName(pitch)}`;
   for (let i = 0; i < HARMONICS; i++) markers[i].style.bottom = `${target[i] * 100}%`;
@@ -82,14 +84,19 @@ function frame(time) {
 $('train').addEventListener('click', () => {
   if (locks.size === HARMONICS) { status('All harmonics are locked. Unlock at least one to teach the synth.'); return; }
   if (!training) model.steps = 0;
-  setTraining(!training); status(training ? 'Learning your sound. Watch the harmonics find their place.' : 'Learning paused. Play the current sound, or keep teaching.');
+  setTraining(!training);
+  if (training) {
+    listen('synth', { toggle:false, durationMs:8000 });
+    status('Listen as the synth learns your target. The piano plays this evolving sound.');
+  } else { stopAudition(); status('Learning paused. Play the current sound, or keep teaching.'); }
 });
 $('reset').addEventListener('click', () => { setTraining(false); model.reset(); sync(); status('Back to a simple tone. Your target and locks are kept.'); });
 document.querySelectorAll('[data-vowel]').forEach(button => button.addEventListener('click', () => {
   if (busy) return; recorded = null; $('listen-original').hidden = true;
   document.querySelectorAll('[data-vowel]').forEach(other => { other.classList.toggle('selected', other===button); other.setAttribute('aria-pressed', String(other===button)); });
   setTarget(vowel(button.dataset.vowel), 196, `SYNTHETIC / ${button.dataset.vowel.toUpperCase()}${button.dataset.vowel[0].toUpperCase()}`);
-  status('Sample ready. Teach the synth, then play your new instrument.');
+  listen('target', { toggle:false });
+  status(`Previewing “${button.dataset.vowel}${button.dataset.vowel[0]}”. Press Teach to hear your synth learn this sound.`);
 }));
 $('record').addEventListener('click', async () => {
   if (busy) return;
@@ -110,16 +117,17 @@ $('record').addEventListener('click', async () => {
     status(error.name === 'NotAllowedError' ? 'Microphone access wasn’t granted. Try a sample, or allow access in your browser and record again.' : error.name === 'NotFoundError' ? 'No microphone was found. Connect one, or try a sample sound.' : error.message);
   } finally { busy = false; controls.forEach(button => button.disabled = false); $('record-text').textContent = 'Record your voice'; $('record').classList.remove('recording'); }
 });
-async function listen(kind) {
+async function listen(kind, { toggle = true, durationMs = 3000 } = {}) {
   if (busy) return;
-  const was = audition; silence(); if (was === kind) return;
+  const was = audition; silence(); if (toggle && was === kind) return;
   const ticket = epoch;
   try {
     await audio.ready(); if (epoch !== ticket) return;
     audition = kind; $(`listen-${kind}`).classList.add('active');
+    $(`listen-${kind}`).textContent = `■ Playing ${kind === 'original' ? 'recording' : kind} · stop`;
     if (kind === 'original' && recorded) await audio.playRecording(recorded.samples, recorded.sampleRate);
     else audio.note('audition', pitch, kind === 'target' ? target : model.weights);
-    auditionTimer = setTimeout(stopAudition, kind === 'original' ? 2100 : 3000);
+    auditionTimer = setTimeout(stopAudition, kind === 'original' ? 2100 : durationMs);
   } catch (error) { status(`Audio couldn’t start: ${error.message}`); stopAudition(); }
 }
 for (const kind of ['target','synth','original']) $(`listen-${kind}`).addEventListener('click', () => listen(kind));

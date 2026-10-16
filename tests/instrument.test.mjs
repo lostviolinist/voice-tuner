@@ -2,11 +2,31 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from '../scripts/build.mjs';
 import { readFile } from 'node:fs/promises';
+import { AudioEngine } from '../src/audio.js';
 await build();
 const { initDSP } = await import('../dist/dsp.js');
 await initDSP(await readFile(new URL('../dist/voice_dsp.wasm',import.meta.url)));
 const { Instrument, cycle } = await import('../dist/model.js');
 const { vowel, analyze } = await import('../dist/analysis.js');
+test('each vowel reaches playback with a distinct harmonic shape at the same pitch', () => {
+  const engine = new AudioEngine();
+  engine.context = { sampleRate:48000, createPeriodicWave:(_real,imaginary) => imaginary.slice() };
+  const waves = ['oo','aa','ee'].map(kind => engine.wave(vowel(kind),196));
+  for (let a=0;a<waves.length;a++) for (let b=a+1;b<waves.length;b++) {
+    const norm = wave => Math.sqrt(wave.reduce((sum,value)=>sum+value*value,0));
+    const na=norm(waves[a]), nb=norm(waves[b]);
+    const distance=Math.sqrt(waves[a].reduce((sum,value,i)=>sum+(value/na-waves[b][i]/nb)**2,0));
+    assert.ok(distance>.4, 'vowels must differ in spectrum, not merely volume');
+  }
+});
+test('changing a target retains the current instrument until it is taught or reset', () => {
+  const instrument=new Instrument(); instrument.setTarget(vowel('aa'));
+  for(let i=0;i<180;i++) instrument.train();
+  const before=instrument.weights.slice(); instrument.setTarget(vowel('ee'));
+  assert.deepEqual(instrument.weights,before);
+  for(let i=0;i<180;i++) instrument.train();
+  assert.ok(instrument.weights.every((value,i)=>Math.abs(value-vowel('ee')[i])<.001));
+});
 test('Handwired synthesis agrees with an independent additive reference', () => {
   const instrument = new Instrument(); instrument.source.set(vowel('aa'));
   const expected = cycle(instrument.weights), actual = instrument.evaluate().waveform;
